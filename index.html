@@ -5,11 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Tower Defense Web</title>
   <style>
-    * {
-      box-sizing: border-box;
-      user-select: none;
-    }
-
+    * { box-sizing: border-box; user-select: none; }
     body {
       margin: 0;
       background: #1f2937;
@@ -19,18 +15,8 @@
       flex-direction: column;
       align-items: center;
     }
-
-    h1 {
-      margin: 14px 0 6px;
-      font-size: 28px;
-    }
-
-    #gameWrap {
-      position: relative;
-      width: 1200px;
-      max-width: 98vw;
-    }
-
+    h1 { margin: 14px 0 6px; font-size: 28px; }
+    #gameWrap { width: 1200px; max-width: 98vw; }
     canvas {
       width: 100%;
       height: auto;
@@ -39,13 +25,7 @@
       border-radius: 14px;
       display: block;
     }
-
-    #info {
-      margin: 8px 0 14px;
-      color: #d1d5db;
-      text-align: center;
-      font-size: 15px;
-    }
+    #info { margin: 8px 0 14px; color: #d1d5db; text-align: center; font-size: 15px; }
   </style>
 </head>
 <body>
@@ -54,7 +34,7 @@
     <canvas id="game" width="1200" height="720"></canvas>
   </div>
   <div id="info">
-    Clique sur un mode, puis sur les socles. 1 clic = voir la portée, 2e clic = construire.
+    1 clic sur un socle = voir la portée. 2e clic = construire. Score Infini+ sauvegardé dans le navigateur.
   </div>
 
   <script>
@@ -66,6 +46,10 @@
     const TOP = 70;
     const BOTTOM = 145;
     const FPS = 60;
+
+    const SAVE_BEST = "pauler_defence_best_score_v1";
+    const SAVE_BOARD = "pauler_defence_leaderboard_v1";
+    const EXTRA_PAD_COST = 2500;
 
     const C = {
       white: "#f5f5f5",
@@ -86,6 +70,37 @@
       bg: "#5c915c",
       path: "#bea578"
     };
+
+    function loadBestScore() {
+      return Number(localStorage.getItem(SAVE_BEST) || 0);
+    }
+
+    function saveBestScore(score) {
+      if (score > loadBestScore()) {
+        localStorage.setItem(SAVE_BEST, String(score));
+      }
+    }
+
+    function loadLeaderboard() {
+      try {
+        const board = JSON.parse(localStorage.getItem(SAVE_BOARD) || "[]");
+        if (!Array.isArray(board)) return [];
+        return board
+          .filter(e => e && typeof e.name === "string" && typeof e.score === "number")
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 10);
+      } catch {
+        return [];
+      }
+    }
+
+    function saveLeaderboardEntry(name, score) {
+      const cleanName = (name || "Joueur").trim().slice(0, 16) || "Joueur";
+      const board = loadLeaderboard();
+      board.push({ name: cleanName, score, date: new Date().toLocaleDateString("fr-FR") });
+      board.sort((a, b) => b.score - a.score);
+      localStorage.setItem(SAVE_BOARD, JSON.stringify(board.slice(0, 10)));
+    }
 
     function dist(a, b) {
       return Math.hypot(a.x - b.x, a.y - b.y);
@@ -156,6 +171,31 @@
       { name: "Coeur renforcé", cost: 650, key: "life", value: 3, desc: "+3 vies max" },
       { name: "Bourse royale", cost: 600, key: "gold", value: 25, desc: "+25 or au début" },
       { name: "Forge légère", cost: 850, key: "damage", value: 0.08, desc: "+8% dégâts" }
+    ];
+
+    const SPEC_INFO = {
+      archer: {
+        one: { name: "Sniper", desc: "Très longue portée + gros dégâts, mais tire plus lentement." },
+        two: { name: "Multi-tirs", desc: "Tire jusqu'à 3 ennemis, dégâts plus faibles par tir." }
+      },
+      cannon: {
+        one: { name: "Mega Canon", desc: "Explosion beaucoup plus grande et meilleurs dégâts." },
+        two: { name: "Canon Feu", desc: "Tire plus vite et fait plus de dégâts." }
+      },
+      frost: {
+        one: { name: "Gel Profond", desc: "Ralentissement très fort et plus longtemps." },
+        two: { name: "Aura Givre", desc: "Très grande portée et meilleure cadence." }
+      }
+    };
+
+    const EXTRA_PADS = [
+      [{x:250,y:120},{x:620,y:520},{x:1040,y:420}],
+      [{x:120,y:360},{x:600,y:120},{x:1040,y:520}],
+      [{x:220,y:240},{x:570,y:610},{x:980,y:260}],
+      [{x:120,y:420},{x:560,y:90},{x:1030,y:600}],
+      [{x:170,y:520},{x:720,y:520},{x:1080,y:220}],
+      [{x:140,y:480},{x:520,y:220},{x:980,y:560}],
+      [{x:160,y:360},{x:700,y:80},{x:1060,y:620}]
     ];
 
     const LEVELS = [
@@ -286,6 +326,7 @@
 
       draw() {
         circle(this.x, this.y, this.size, this.color);
+
         if (this.type === "shield") circle(this.x, this.y, this.size + 3, null, C.white, 2);
         if (this.type === "healer") {
           ctx.strokeStyle = C.white;
@@ -306,9 +347,15 @@
 
     class Projectile {
       constructor(x, y, target, damage, color, speed = 6, splash = 0, slow = null) {
-        this.x = x; this.y = y; this.target = target;
-        this.damage = damage; this.color = color; this.speed = speed;
-        this.splash = splash; this.slow = slow; this.dead = false;
+        this.x = x;
+        this.y = y;
+        this.target = target;
+        this.damage = damage;
+        this.color = color;
+        this.speed = speed;
+        this.splash = splash;
+        this.slow = slow;
+        this.dead = false;
       }
 
       update(enemies) {
@@ -350,7 +397,9 @@
     class Tower {
       constructor(x, y, type, damageMul = 1, hard = false) {
         const s = TOWERS[type];
-        this.x = x; this.y = y; this.type = type;
+        this.x = x;
+        this.y = y;
+        this.type = type;
         this.range = s.range;
         this.damage = s.damage * damageMul;
         this.cooldownMax = s.cooldown;
@@ -373,7 +422,9 @@
         return Math.floor(42 + this.level * 38);
       }
 
-      specCost() { return 220; }
+      specCost() {
+        return 220;
+      }
 
       sellValue() {
         let total = TOWERS[this.type].cost;
@@ -394,12 +445,39 @@
       specialize(spec) {
         if (this.level < 4 || this.specialization) return false;
         this.specialization = spec;
-        if (spec === "sniper") { this.label = "Sniper"; this.damage *= 2.1; this.range += 80; this.cooldownMax *= 1.35; }
-        if (spec === "multishot") { this.label = "Multi"; this.damage *= 0.75; this.cooldownMax = Math.max(12, this.cooldownMax * 0.55); }
-        if (spec === "mega_bomb") { this.label = "Mega Canon"; this.damage *= 1.45; this.range += 15; }
-        if (spec === "fire") { this.label = "Canon Feu"; this.damage *= 1.25; this.cooldownMax = Math.max(18, this.cooldownMax * 0.82); }
-        if (spec === "deep_freeze") { this.label = "Gel Profond"; this.damage *= 1.15; this.range += 30; }
-        if (spec === "aura") { this.label = "Aura Givre"; this.range += 45; this.cooldownMax = Math.max(18, this.cooldownMax * 0.75); }
+
+        if (spec === "sniper") {
+          this.label = "Sniper";
+          this.damage *= 2.1;
+          this.range += 80;
+          this.cooldownMax *= 1.35;
+        }
+        if (spec === "multishot") {
+          this.label = "Multi";
+          this.damage *= 0.75;
+          this.cooldownMax = Math.max(12, this.cooldownMax * 0.55);
+        }
+        if (spec === "mega_bomb") {
+          this.label = "Mega Canon";
+          this.damage *= 1.45;
+          this.range += 15;
+        }
+        if (spec === "fire") {
+          this.label = "Canon Feu";
+          this.damage *= 1.25;
+          this.cooldownMax = Math.max(18, this.cooldownMax * 0.82);
+        }
+        if (spec === "deep_freeze") {
+          this.label = "Gel Profond";
+          this.damage *= 1.15;
+          this.range += 30;
+        }
+        if (spec === "aura") {
+          this.label = "Aura Givre";
+          this.range += 45;
+          this.cooldownMax = Math.max(18, this.cooldownMax * 0.75);
+        }
+
         this.cooldownMax = Math.floor(this.cooldownMax);
         return true;
       }
@@ -426,24 +504,32 @@
             projectiles.push(new Projectile(this.x, this.y, target, this.damage, C.orange, 5, splash));
           }
           if (this.type === "frost") {
-            let factor = 0.58, time = 120;
+            let factor = 0.58;
+            let time = 120;
             if (this.specialization === "deep_freeze") { factor = 0.38; time = 180; }
             if (this.specialization === "aura") { factor = 0.50; time = 150; }
-            projectiles.push(new Projectile(this.x, this.y, target, this.damage, C.blue, 7, 0, {factor, time}));
+            projectiles.push(new Projectile(this.x, this.y, target, this.damage, C.blue, 7, 0, { factor, time }));
           }
         }
+
         this.cooldown = this.cooldownMax;
       }
 
       draw(selected) {
         circle(this.x, this.y, 20, this.color, C.black, 2);
         if (this.specialization) circle(this.x, this.y, 25, null, C.yellow, 3);
+
         if (this.type === "archer") {
-          ctx.strokeStyle = C.white; ctx.lineWidth = 3;
-          ctx.beginPath(); ctx.moveTo(this.x - 7, this.y + 7); ctx.lineTo(this.x + 8, this.y - 8); ctx.stroke();
+          ctx.strokeStyle = C.white;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(this.x - 7, this.y + 7);
+          ctx.lineTo(this.x + 8, this.y - 8);
+          ctx.stroke();
         }
         if (this.type === "cannon") circle(this.x, this.y, 8, C.black);
         if (this.type === "frost") circle(this.x, this.y, 8, null, C.white, 2);
+
         if (selected) {
           circle(this.x, this.y, this.range, null, C.white, 1);
           circle(this.x, this.y, 24, null, C.yellow, 3);
@@ -470,24 +556,39 @@
         this.endlessTimer = 0;
         this.endlessSpawn = 0;
         this.effects = [];
+        this.scoreSaved = false;
         this.resetLevel(true);
       }
 
-      resetLevel(full=false) {
+      resetLevel(full = false) {
         if (full) {
           this.levelIndex = 0;
           this.inEndless = false;
           this.cycle = 0;
           this.stage = 0;
         }
+
         this.level = LEVELS[this.levelIndex];
         this.path = this.level.path;
-        this.pads = this.level.pads;
+        this.pads = this.level.pads.map(p => ({ x: p.x, y: p.y }));
+        this.lockedPads = (EXTRA_PADS[this.levelIndex] || []).map(p => ({ x: p.x, y: p.y }));
         this.waves = this.level.waves;
+
         this.life = 20 + this.bonusLife;
         this.gold = 120 + this.bonusGold;
-        if (this.mode === "hard") { this.life = Math.max(8, this.life - 4); this.gold = Math.max(70, this.gold - 20); }
-        if (this.mode === "endless_plus") { this.life = 30; this.gold = 180; this.inEndless = true; this.levelIndex = 0; }
+
+        if (this.mode === "hard") {
+          this.life = Math.max(8, this.life - 4);
+          this.gold = Math.max(70, this.gold - 20);
+        }
+
+        if (this.mode === "endless_plus") {
+          this.life = 30;
+          this.gold = 180;
+          this.inEndless = true;
+          this.levelIndex = 0;
+        }
+
         this.waveIndex = 0;
         this.towers = [];
         this.enemies = [];
@@ -513,16 +614,21 @@
         this.inEndless = false;
         this.cycle = 0;
         this.stage = 0;
+        this.effects = [];
+        this.scoreSaved = false;
         this.resetLevel(true);
         this.state = "playing";
       }
 
-      effect(x, y, msg, color=C.yellow) {
-        this.effects.push({x, y, msg, color, time: 35});
+      effect(x, y, msg, color = C.yellow) {
+        this.effects.push({ x, y, msg, color, time: 35 });
       }
 
       updateEffects() {
-        for (const e of this.effects) { e.y -= 1; e.time--; }
+        for (const e of this.effects) {
+          e.y -= 1;
+          e.time--;
+        }
         this.effects = this.effects.filter(e => e.time > 0);
       }
 
@@ -547,9 +653,21 @@
         return 1 + this.cycle * 0.22 + (this.stage - 1) * 0.08;
       }
 
-      occupied(pad) { return this.towers.some(t => t.x === pad.x && t.y === pad.y); }
-      towerAt(p) { return [...this.towers].reverse().find(t => dist(t, p) <= 24) || null; }
-      padAt(p) { return this.pads.find(pad => dist(pad, p) <= 26) || null; }
+      occupied(pad) {
+        return this.towers.some(t => t.x === pad.x && t.y === pad.y);
+      }
+
+      towerAt(p) {
+        return [...this.towers].reverse().find(t => dist(t, p) <= 24) || null;
+      }
+
+      padAt(p) {
+        return this.pads.find(pad => dist(pad, p) <= 26) || null;
+      }
+
+      lockedPadAt(p) {
+        return this.lockedPads.find(pad => dist(pad, p) <= 26) || null;
+      }
 
       previewRange() {
         let r = TOWERS[this.selectedBuild].range;
@@ -557,10 +675,26 @@
         return r;
       }
 
+      buyLockedPad(pad) {
+        if (this.gold < EXTRA_PAD_COST) {
+          this.effect(pad.x, pad.y, "Pas assez", C.red);
+          return;
+        }
+        this.gold -= EXTRA_PAD_COST;
+        this.pads.push(pad);
+        this.lockedPads = this.lockedPads.filter(p => p !== pad);
+        this.effect(pad.x, pad.y, "Acheté !", C.green);
+      }
+
       buildTower(pad) {
         if (this.occupied(pad)) return;
+
         const cost = TOWERS[this.selectedBuild].cost;
-        if (this.gold < cost) { this.effect(pad.x, pad.y, "Pas assez", C.red); return; }
+        if (this.gold < cost) {
+          this.effect(pad.x, pad.y, "Pas assez", C.red);
+          return;
+        }
+
         this.gold -= cost;
         const mul = (1 + this.bonusDamage) * this.towerPenalty();
         this.towers.push(new Tower(pad.x, pad.y, this.selectedBuild, mul, this.mode === "hard"));
@@ -577,23 +711,32 @@
       }
 
       buyMeta(b) {
-        if (this.metaGold < b.cost) { this.effect(W/2, 130, "Pas assez", C.red); return; }
+        if (this.metaGold < b.cost) {
+          this.effect(W / 2, 130, "Pas assez", C.red);
+          return;
+        }
         this.metaGold -= b.cost;
         if (b.key === "life") this.bonusLife += b.value;
         if (b.key === "gold") this.bonusGold += b.value;
         if (b.key === "damage") this.bonusDamage += b.value;
-        this.effect(W/2, 130, "Acheté !", C.green);
+        this.effect(W / 2, 130, "Acheté !", C.green);
       }
 
       specialize(n) {
         const t = this.selectedTower;
         if (!t || t.level < 4 || t.specialization) return;
+
         const cost = t.specCost();
-        if (this.gold < cost) { this.effect(t.x, t.y, "Pas assez", C.red); return; }
+        if (this.gold < cost) {
+          this.effect(t.x, t.y, "Pas assez", C.red);
+          return;
+        }
+
         let spec;
         if (t.type === "archer") spec = n === 1 ? "sniper" : "multishot";
         if (t.type === "cannon") spec = n === 1 ? "mega_bomb" : "fire";
         if (t.type === "frost") spec = n === 1 ? "deep_freeze" : "aura";
+
         this.gold -= cost;
         t.specialize(spec);
         this.effect(t.x, t.y, "SPEC!", C.purple);
@@ -601,9 +744,9 @@
 
       endlessWaveData(w) {
         const scale = this.cycle + this.stage;
-        if (w === 0) return [["grunt", 10 + scale*2], ["fast", 6 + scale]];
-        if (w === 1) return [["tank", 5 + Math.floor(scale/2)], ["flying", 8 + scale], ["shield", 5 + Math.floor(scale/2)]];
-        return [["runner", 10 + scale], ["healer", 4 + Math.floor(scale/2)], ["boss", 1 + Math.floor(this.cycle/3)]];
+        if (w === 0) return [["grunt", 10 + scale * 2], ["fast", 6 + scale]];
+        if (w === 1) return [["tank", 5 + Math.floor(scale / 2)], ["flying", 8 + scale], ["shield", 5 + Math.floor(scale / 2)]];
+        return [["runner", 10 + scale], ["healer", 4 + Math.floor(scale / 2)], ["boss", 1 + Math.floor(this.cycle / 3)]];
       }
 
       currentWaveData() {
@@ -613,12 +756,15 @@
 
       startWave() {
         if (this.mode === "endless_plus") return;
+
         const max = this.inEndless ? 3 : this.waves.length;
         if (this.waveIndex >= max) return;
+
         this.waveQueue = [];
         for (const [type, count] of this.currentWaveData()) {
-          for (let i=0; i<count; i++) this.waveQueue.push(type);
+          for (let i = 0; i < count; i++) this.waveQueue.push(type);
         }
+
         this.waveQueue.sort(() => Math.random() - 0.5);
         this.waveActive = true;
         this.betweenWaves = false;
@@ -630,7 +776,10 @@
       spawn(type) {
         let hpMul = this.enemyMultiplier();
         let spdMul = 1;
-        if (this.mode === "hard") { hpMul *= 1.10; spdMul *= 1.04; }
+        if (this.mode === "hard") {
+          hpMul *= 1.10;
+          spdMul *= 1.04;
+        }
         this.enemies.push(new Enemy(type, this.path, hpMul, spdMul));
       }
 
@@ -638,10 +787,13 @@
         this.endlessTimer++;
         const seconds = this.endlessTimer / FPS;
         const difficulty = 1 + seconds / 90;
+
         this.endlessSpawn--;
         const delay = Math.max(12, Math.floor(70 / difficulty));
+
         if (this.endlessSpawn <= 0) {
           this.endlessSpawn = delay;
+
           const pool = ["grunt"];
           if (seconds > 30) pool.push("fast");
           if (seconds > 60) pool.push("tank");
@@ -650,11 +802,27 @@
           if (seconds > 170) pool.push("runner");
           if (seconds > 220) pool.push("healer");
           if (seconds > 300) pool.push("boss");
+
           const type = pool[Math.floor(Math.random() * pool.length)];
           const hpMul = difficulty;
           const spdMul = 1 + Math.min(0.65, seconds / 900);
           this.enemies.push(new Enemy(type, this.path, hpMul, spdMul));
         }
+      }
+
+      finishGame() {
+        if (this.mode === "endless_plus" && !this.scoreSaved) {
+          this.scoreSaved = true;
+          saveBestScore(this.score);
+          const board = loadLeaderboard();
+          const worstTopScore = board.length < 10 ? -1 : board[board.length - 1].score;
+          if (this.score > 0 && (board.length < 10 || this.score > worstTopScore)) {
+            const name = prompt(`Nouveau score Infini+ : ${this.score}
+Entre ton nom pour le leaderboard :`, "Paul");
+            saveLeaderboardEntry(name, this.score);
+          }
+        }
+        this.state = "game_over";
       }
 
       update() {
@@ -690,8 +858,10 @@
             let reward = e.reward;
             if (this.mode === "hard") reward = Math.max(1, Math.floor(reward * 0.90));
             if (this.inEndless && this.mode !== "endless_plus") reward = Math.max(1, Math.floor(reward * 0.85));
+
             this.gold += reward;
             this.metaGold += reward;
+
             if (this.mode === "endless_plus") this.score += reward * 10;
             e.hp = 999999;
           }
@@ -700,7 +870,11 @@
         this.enemies = this.enemies.filter(e => !(e.dead && e.hp > 100000) && !(e.dead && e.reached));
         this.projectiles = this.projectiles.filter(p => !p.dead);
 
-        if (this.life <= 0) { this.state = "game_over"; return; }
+        if (this.life <= 0) {
+          this.finishGame();
+          return;
+        }
+
         if (this.mode === "endless_plus") return;
 
         const activeLeft = this.enemies.some(e => !e.dead && !e.reached);
@@ -723,6 +897,7 @@
         let reward = this.mode === "hard" ? 35 : 65;
         if (this.inEndless) reward = Math.floor(reward * 0.75);
         this.metaGold += reward;
+
         if (!this.inEndless) {
           this.levelIndex++;
           if (this.levelIndex >= LEVELS.length) {
@@ -740,6 +915,7 @@
             this.stage = 1;
           }
         }
+
         this.resetLevel(false);
         this.state = "playing";
       }
@@ -758,7 +934,12 @@
         }
 
         if (this.state === "level_complete") {
-          for (const item of this.metaRects) if (inside(p, item.rect)) { this.buyMeta(item.bonus); return; }
+          for (const item of this.metaRects) {
+            if (inside(p, item.rect)) {
+              this.buyMeta(item.bonus);
+              return;
+            }
+          }
           if (inside(p, this.btnNext)) this.nextLevel();
           return;
         }
@@ -773,21 +954,41 @@
         if (inside(p, this.btnUpgrade) && this.selectedTower) {
           const cost = this.selectedTower.upgradeCost();
           if (cost !== null && this.gold >= cost) {
-            this.gold -= cost; this.selectedTower.upgrade(); this.effect(this.selectedTower.x, this.selectedTower.y, "UP!", C.green);
-          } else if (cost !== null) this.effect(this.selectedTower.x, this.selectedTower.y, "Pas assez", C.red);
+            this.gold -= cost;
+            this.selectedTower.upgrade();
+            this.effect(this.selectedTower.x, this.selectedTower.y, "UP!", C.green);
+          } else if (cost !== null) {
+            this.effect(this.selectedTower.x, this.selectedTower.y, "Pas assez", C.red);
+          }
           return;
         }
+
         if (inside(p, this.btnSell) && this.selectedTower) { this.sellTower(); return; }
         if (inside(p, this.btnSpec1) && this.selectedTower) { this.specialize(1); return; }
         if (inside(p, this.btnSpec2) && this.selectedTower) { this.specialize(2); return; }
 
         const t = this.towerAt(p);
-        if (t) { this.selectedTower = t; this.previewPad = null; return; }
+        if (t) {
+          this.selectedTower = t;
+          this.previewPad = null;
+          return;
+        }
+
+        const locked = this.lockedPadAt(p);
+        if (locked) {
+          this.buyLockedPad(locked);
+          this.selectedTower = null;
+          this.previewPad = null;
+          return;
+        }
 
         const pad = this.padAt(p);
         if (pad && !this.occupied(pad)) {
           this.selectedTower = null;
-          if (this.previewPad !== pad) { this.previewPad = pad; return; }
+          if (this.previewPad !== pad) {
+            this.previewPad = pad;
+            return;
+          }
           this.buildTower(pad);
           this.previewPad = null;
           return;
@@ -824,6 +1025,12 @@
           circle(p.x, p.y, 26, this.occupied(p) ? C.dark : C.lightGray, C.white, 2);
         }
 
+        for (const p of this.lockedPads) {
+          circle(p.x, p.y, 26, "#3b1f1f", C.red, 3);
+          text("+", p.x, p.y - 2, 24, C.yellow, "center");
+          text("2500", p.x, p.y + 28, 14, C.yellow, "center");
+        }
+
         if (this.previewPad) {
           ctx.save();
           ctx.globalAlpha = 0.25;
@@ -839,13 +1046,15 @@
         text(`Niveau : ${this.displayLevel()} - ${this.level.name}`, 210, 35, 21);
         text(`Vie : ${this.life}`, 560, 35, 21);
         text(`Or : ${this.gold}`, 680, 35, 21, C.yellow);
+
         if (this.mode === "endless_plus") {
           text(`Score : ${this.score}`, 810, 35, 21, C.cyan);
-          text(`Temps : ${Math.floor(this.endlessTimer / FPS)}s`, 980, 35, 21);
+          text(`Record : ${loadBestScore()}`, 960, 35, 21, C.yellow);
         } else {
           const max = this.inEndless ? 3 : this.waves.length;
           text(`Vague : ${Math.min(this.waveIndex + (this.betweenWaves ? 0 : 1), max)}/${max}`, 830, 35, 21);
         }
+
         this.btnWave = button(1040, 15, 145, 40, this.mode === "endless_plus" ? "Infini" : (this.betweenWaves ? "Lancer" : "En cours"), this.betweenWaves ? C.green : C.gray);
       }
 
@@ -861,59 +1070,90 @@
         this.btnCannon = button(175, y, 145, 46, "Canon", this.selectedBuild === "cannon" ? C.orange : C.dark);
         this.btnFrost = button(330, y, 145, 46, "Givre", this.selectedBuild === "frost" ? C.blue : C.dark);
         this.btnUpgrade = button(495, y, 155, 46, "Améliorer", this.selectedTower ? C.purple : C.dark);
-        this.btnSell = button(495, y+56, 155, 38, "Vendre", this.selectedTower ? C.red : C.dark);
+        this.btnSell = button(495, y + 56, 155, 38, "Vendre", this.selectedTower ? C.red : C.dark);
+
         const specOK = this.selectedTower && this.selectedTower.level >= 4 && !this.selectedTower.specialization;
         this.btnSpec1 = button(665, y, 145, 46, "Spé 1", specOK ? C.cyan : C.dark);
-        this.btnSpec2 = button(665, y+56, 145, 38, "Spé 2", specOK ? C.cyan : C.dark);
+        this.btnSpec2 = button(665, y + 56, 145, 38, "Spé 2", specOK ? C.cyan : C.dark);
 
-        rect(830, y, 340, 100, C.dark, C.white, 14);
+        rect(830, y, 350, 112, C.dark, C.white, 14);
+
         if (this.selectedTower) {
           const t = this.selectedTower;
-          text(`${t.label} niv ${t.level}/4`, 845, y+20, 20);
-          text(`Dégâts ${Math.floor(t.damage)} | Portée ${Math.floor(t.range)}`, 845, y+50, 17);
-          text(`Vente : ${t.sellValue()}`, 845, y+78, 17, C.yellow);
           const up = t.upgradeCost();
-          text(up === null ? "Max : spécialise" : `Upgrade : ${up}`, 965, y+78, 17, C.cyan);
+          const spec = SPEC_INFO[t.type];
+          text(`${t.label} niv ${t.level}/4`, 845, y + 15, 18);
+          text(`Dégâts ${Math.floor(t.damage)} | Portée ${Math.floor(t.range)}`, 845, y + 37, 15);
+          text(`Vente : ${t.sellValue()}`, 845, y + 58, 15, C.yellow);
+          text(up === null ? `Spé : ${t.specCost()}` : `Upgrade : ${up}`, 965, y + 58, 15, C.cyan);
+
+          if (up === null && !t.specialization) {
+            text(`1 ${spec.one.name}: ${spec.one.desc}`, 845, y + 80, 12, C.white);
+            text(`2 ${spec.two.name}: ${spec.two.desc}`, 845, y + 98, 12, C.white);
+          } else if (t.specialization) {
+            text(`Spécialisation : ${t.label}`, 845, y + 85, 14, C.purple);
+          }
         } else if (this.previewPad) {
-          text(`Preview : ${TOWERS[this.selectedBuild].label}`, 845, y+25, 20);
-          text(`Portée : ${Math.floor(this.previewRange())}`, 845, y+55, 17, C.cyan);
-          text("2e clic = construire", 845, y+80, 17, C.yellow);
+          const tower = TOWERS[this.selectedBuild];
+          const spec = SPEC_INFO[this.selectedBuild];
+          text(`Preview : ${tower.label} (${tower.cost})`, 845, y + 17, 18);
+          text(`Portée : ${Math.floor(this.previewRange())}`, 845, y + 39, 15, C.cyan);
+          text(`Upgrade niv 2 : ${Math.floor(42 + 1 * 38)} | Spé niv 4 : 220`, 845, y + 60, 14, C.yellow);
+          text(`Spé 1 ${spec.one.name}: ${spec.one.desc}`, 845, y + 81, 12, C.white);
+          text(`Spé 2 ${spec.two.name}: ${spec.two.desc}`, 845, y + 99, 12, C.white);
         } else {
-          text("1 clic socle = portée", 845, y+35, 20);
-          text("2e clic = construire", 845, y+68, 17, C.cyan);
+          text("1 clic socle = portée", 845, y + 25, 18);
+          text("2e clic = construire", 845, y + 50, 15, C.cyan);
+          text(`Socle rouge = acheter emplacement (${EXTRA_PAD_COST})`, 845, y + 76, 14, C.yellow);
+        }
+      }
+
+      drawLeaderboard(x, y, compact = false) {
+        const board = loadLeaderboard();
+        text("Leaderboard Infini+", x, y, compact ? 18 : 22, C.yellow, "center");
+        if (board.length === 0) {
+          text("Aucun score pour l'instant", x, y + 32, 16, C.lightGray, "center");
+          return;
+        }
+        for (let i = 0; i < Math.min(board.length, compact ? 5 : 10); i++) {
+          const e = board[i];
+          text(`${i + 1}. ${e.name} - ${e.score}`, x, y + 32 + i * 23, compact ? 15 : 17, C.white, "center");
         }
       }
 
       drawMenu() {
         ctx.fillStyle = "#285078";
         ctx.fillRect(0, 0, W, H);
-        text("Tower Defense Web", W/2, 110, 48, C.white, "center");
-        text("Version navigateur complète", W/2, 165, 24, C.white, "center");
-        this.btnNormal = button(W/2-180, 250, 360, 65, "NORMAL", C.green);
-        this.btnHard = button(W/2-180, 340, 360, 65, "HARD", C.red);
-        this.btnInfini = button(W/2-180, 430, 360, 65, "INFINI +", C.purple);
-        text("Normal : campagne + infini après les niveaux", W/2, 545, 20, C.white, "center");
-        text("Hard : moins d'or, canon nerfé, tours nerfées", W/2, 575, 20, C.white, "center");
-        text("Infini+ : score, ennemis continus, difficulté sans fin", W/2, 605, 20, C.white, "center");
+        text("Tower Defense Web", W / 2, 85, 44, C.white, "center");
+        text("Version navigateur complète", W / 2, 135, 22, C.white, "center");
+
+        this.btnNormal = button(W / 2 - 180, 210, 360, 60, "NORMAL", C.green);
+        this.btnHard = button(W / 2 - 180, 290, 360, 60, "HARD", C.red);
+        this.btnInfini = button(W / 2 - 180, 370, 360, 60, "INFINI +", C.purple);
+
+        text(`Record Infini+ : ${loadBestScore()}`, W / 2, 470, 24, C.yellow, "center");
+        this.drawLeaderboard(W / 2, 520, true);
       }
 
       drawLevelComplete() {
         ctx.fillStyle = "#1e3250";
         ctx.fillRect(0, 0, W, H);
-        text("Niveau terminé !", W/2, 80, 46, C.white, "center");
-        text(`Or campagne : ${this.metaGold}`, W/2, 140, 24, C.yellow, "center");
+        text("Niveau terminé !", W / 2, 80, 46, C.white, "center");
+        text(`Or campagne : ${this.metaGold}`, W / 2, 140, 24, C.yellow, "center");
+
         this.metaRects = [];
         let y = 210;
         for (const b of META) {
-          const r = {x:180, y, w:840, h:75};
+          const r = { x: 180, y, w: 840, h: 75 };
           rect(r.x, r.y, r.w, r.h, C.panel, C.white, 14);
-          text(b.name, r.x+20, r.y+22, 22);
-          text(b.desc, r.x+20, r.y+52, 17, C.lightGray);
-          text(`Coût : ${b.cost}`, r.x+r.w-150, r.y+38, 22, C.yellow);
-          this.metaRects.push({rect:r, bonus:b});
+          text(b.name, r.x + 20, r.y + 22, 22);
+          text(b.desc, r.x + 20, r.y + 52, 17, C.lightGray);
+          text(`Coût : ${b.cost}`, r.x + r.w - 150, r.y + 38, 22, C.yellow);
+          this.metaRects.push({ rect: r, bonus: b });
           y += 95;
         }
-        this.btnNext = button(W/2-160, 590, 320, 65, "Continuer", C.green);
+
+        this.btnNext = button(W / 2 - 160, 590, 320, 65, "Continuer", C.green);
         this.drawEffects();
       }
 
@@ -923,11 +1163,18 @@
         this.drawHud();
         this.drawBottom();
         ctx.fillStyle = "rgba(0,0,0,0.65)";
-        ctx.fillRect(0,0,W,H);
-        text("Défaite", W/2, 220, 52, C.red, "center");
-        if (this.mode === "endless_plus") text(`Score final : ${this.score}`, W/2, 300, 32, C.yellow, "center");
-        else text(`Tu es arrivé au niveau : ${this.displayLevel()}`, W/2, 300, 32, C.white, "center");
-        this.btnRestart = button(W/2-150, 390, 300, 65, "Retour menu", C.green);
+        ctx.fillRect(0, 0, W, H);
+
+        text("Défaite", W / 2, 165, 52, C.red, "center");
+        if (this.mode === "endless_plus") {
+          text(`Score final : ${this.score}`, W / 2, 235, 32, C.yellow, "center");
+          text(`Record : ${loadBestScore()}`, W / 2, 275, 24, C.cyan, "center");
+          this.drawLeaderboard(W / 2, 325, false);
+          this.btnRestart = button(W / 2 - 150, 620, 300, 60, "Retour menu", C.green);
+        } else {
+          text(`Tu es arrivé au niveau : ${this.displayLevel()}`, W / 2, 275, 32, C.white, "center");
+          this.btnRestart = button(W / 2 - 150, 380, 300, 65, "Retour menu", C.green);
+        }
       }
 
       drawPlaying() {
