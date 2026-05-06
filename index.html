@@ -1,1534 +1,179 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tower Defense Web</title>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <style>
-    * {
-      box-sizing: border-box;
-      user-select: none;
-    }
-
-    body {
-      margin: 0;
-      background: #1f2937;
-      color: white;
-      font-family: Arial, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-
-    h1 {
-      margin: 12px 0 6px;
-      font-size: 28px;
-    }
-
-    #gameWrap {
-      width: 1200px;
-      max-width: 98vw;
-    }
-
-    canvas {
-      width: 100%;
-      height: auto;
-      background: #5c915c;
-      border: 3px solid white;
-      border-radius: 14px;
-      display: block;
-    }
-
-    #info {
-      margin: 8px 0 14px;
-      color: #d1d5db;
-      text-align: center;
-      font-size: 15px;
-    }
-  </style>
+<meta charset="UTF-8">
+<title>Tower Defense - Placement complet</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box;user-select:none}
+body{margin:0;background:#1f2937;color:white;font-family:Arial;text-align:center}
+h1{margin:10px 0 6px;font-size:28px}
+canvas{width:1200px;max-width:98vw;height:auto;border:3px solid white;border-radius:14px;background:#5c915c}
+#info{margin:8px 0 14px;color:#d1d5db;font-size:15px}
+</style>
 </head>
 <body>
-  <h1>Tower Defense Web</h1>
-
-  <div id="gameWrap">
-    <canvas id="game" width="1200" height="720"></canvas>
-  </div>
-
-  <div id="info">
-    1 clic sur un socle = voir la portée. 2e clic = construire. Le leaderboard utilise Supabase.
-  </div>
-
-  <script>
-
-    const SUPABASE_URL = "https://owgbljtieiopeqtzabrp.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93Z2JsanRpZWlvcGVxdHphYnJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwMTQ2ODksImV4cCI6MjA5MzU5MDY4OX0.yzdSCb9LjIBgeqXlTVtiZzeOM11-0heR6CPVav031N8";
-
-    const supabaseClient = (
-      SUPABASE_URL.startsWith("https://") &&
-      SUPABASE_ANON_KEY.length > 20 &&
-      window.supabase
-    ) ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
-
-    // =====================================================
-    // CANVAS / CONFIG
-    // =====================================================
-    const canvas = document.getElementById("game");
-    const ctx = canvas.getContext("2d");
-
-    const W = canvas.width;
-    const H = canvas.height;
-    const TOP = 70;
-    const BOTTOM = 145;
-    const FPS = 60;
-    const EXTRA_PAD_COST = 2500;
-
-    const C = {
-      white: "#f5f5f5",
-      black: "#151515",
-      dark: "#232832",
-      panel: "#2d3441",
-      gray: "#737b84",
-      lightGray: "#c7ccd1",
-      green: "#3cb45a",
-      red: "#d24646",
-      blue: "#508ce6",
-      yellow: "#e6d246",
-      orange: "#eb913c",
-      purple: "#aa5adc",
-      cyan: "#50d2d2",
-      brown: "#8c6446",
-      pink: "#eb78b4",
-      bg: "#5c915c",
-      path: "#bea578"
-    };
-
-    // =====================================================
-    // OUTILS
-    // =====================================================
-    function dist(a, b) {
-      return Math.hypot(a.x - b.x, a.y - b.y);
-    }
-
-    function circle(x, y, r, color, stroke = null, width = 2) {
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      if (color) {
-        ctx.fillStyle = color;
-        ctx.fill();
-      }
-      if (stroke) {
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = width;
-        ctx.stroke();
-      }
-    }
-
-    function rect(x, y, w, h, color, stroke = null, radius = 10) {
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, radius);
-      ctx.fillStyle = color;
-      ctx.fill();
-      if (stroke) {
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    }
-
-    function text(t, x, y, size = 20, color = C.white, align = "left") {
-      ctx.fillStyle = color;
-      ctx.font = `${size}px Arial`;
-      ctx.textAlign = align;
-      ctx.textBaseline = "middle";
-      ctx.fillText(t, x, y);
-    }
-
-    function button(x, y, w, h, label, color) {
-      rect(x, y, w, h, color, C.white, 12);
-      text(label, x + w / 2, y + h / 2, 20, C.white, "center");
-      return { x, y, w, h };
-    }
-
-    function inside(p, r) {
-      return r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
-    }
-
-    // =====================================================
-    // SUPABASE LEADERBOARD
-    // =====================================================
-    let leaderboardCache = [];
-    let leaderboardReady = false;
-
-    function normalizeBoard(board) {
-      if (!Array.isArray(board)) return [];
-      return board
-        .filter(e => e && typeof e.pseudo === "string" && typeof e.score === "number")
-        .map(e => ({
-          pseudo: e.pseudo.slice(0, 16),
-          score: e.score,
-          created_at: e.created_at || ""
-        }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 10);
-    }
-
-    async function refreshLeaderboard() {
-      if (!supabaseClient) {
-        leaderboardReady = true;
-        leaderboardCache = [];
-        return;
-      }
-
-      const { data, error } = await supabaseClient.rpc("td_get_leaderboard");
-
-      if (error) {
-        console.error("Erreur Supabase leaderboard :", error);
-        leaderboardCache = [];
-      } else {
-        leaderboardCache = normalizeBoard(data || []);
-      }
-
-      leaderboardReady = true;
-    }
-
-    async function submitScoreOnline(pseudo, password, score) {
-      if (!supabaseClient) {
-        return {
-          ok: false,
-          message: "Supabase n'est pas configuré. Remplis SUPABASE_URL et SUPABASE_ANON_KEY."
-        };
-      }
-
-      const cleanPseudo = (pseudo || "").trim().slice(0, 16);
-
-      if (!cleanPseudo) {
-        return { ok: false, message: "Pseudo vide." };
-      }
-
-      if (!password || password.length < 3) {
-        return { ok: false, message: "Mot de passe trop court." };
-      }
-
-      const { data, error } = await supabaseClient.rpc("td_submit_score", {
-        p_pseudo: cleanPseudo,
-        p_password: password,
-        p_score: score
-      });
-
-      if (error) {
-        return { ok: false, message: error.message || "Erreur Supabase." };
-      }
-
-      await refreshLeaderboard();
-
-      return {
-        ok: true,
-        message: data?.message || "Score ajouté au leaderboard !"
-      };
-    }
-
-    // =====================================================
-    // DONNÉES DU JEU
-    // =====================================================
-    const ENEMIES = {
-      grunt:  { hp: 55,  speed: 1.10, reward: 10, color: C.red,    size: 14, armor: 0 },
-      fast:   { hp: 35,  speed: 2.00, reward: 9,  color: C.yellow, size: 11, armor: 0 },
-      tank:   { hp: 140, speed: 0.72, reward: 18, color: C.brown,  size: 18, armor: 0.10 },
-      flying: { hp: 42,  speed: 1.75, reward: 12, color: C.cyan,   size: 12, armor: 0 },
-      shield: { hp: 105, speed: 1.05, reward: 16, color: C.blue,   size: 15, armor: 0.30 },
-      runner: { hp: 52,  speed: 2.55, reward: 14, color: C.pink,   size: 11, armor: 0 },
-      healer: { hp: 95,  speed: 1.00, reward: 20, color: C.purple, size: 15, armor: 0 },
-      boss:   { hp: 550, speed: 0.68, reward: 90, color: C.black,  size: 28, armor: 0.20 }
-    };
-
-    const TOWERS = {
-      archer: {
-        cost: 70,
-        range: 145,
-        damage: 18,
-        cooldown: 34,
-        color: C.green,
-        label: "Archer"
-      },
-      cannon: {
-        cost: 110,
-        range: 110,
-        damage: 32,
-        cooldown: 60,
-        splash: 45,
-        color: C.orange,
-        label: "Canon"
-      },
-      frost: {
-        cost: 95,
-        range: 125,
-        damage: 10,
-        cooldown: 44,
-        color: C.blue,
-        label: "Givre"
-      }
-    };
-
-    const META = [
-      { name: "Coeur renforcé", cost: 650, key: "life", value: 3, desc: "+3 vies max" },
-      { name: "Bourse royale", cost: 600, key: "gold", value: 25, desc: "+25 or au début" },
-      { name: "Forge légère", cost: 850, key: "damage", value: 0.08, desc: "+8% dégâts" }
-    ];
-
-    const SPEC_INFO = {
-      archer: {
-        one: { name: "Sniper", desc: "Très longue portée + gros dégâts, mais tire plus lentement." },
-        two: { name: "Multi-tirs", desc: "Tire jusqu'à 3 ennemis, dégâts plus faibles par tir." }
-      },
-      cannon: {
-        one: { name: "Mega Canon", desc: "Explosion beaucoup plus grande et meilleurs dégâts." },
-        two: { name: "Canon Feu", desc: "Tire plus vite et fait plus de dégâts." }
-      },
-      frost: {
-        one: { name: "Gel Profond", desc: "Ralentissement très fort et plus longtemps." },
-        two: { name: "Aura Givre", desc: "Très grande portée et meilleure cadence." }
-      }
-    };
-
-    const LEVELS = [
-      {
-        name: "Plaine du pont",
-        enemy: "grunt",
-        path: [{x:0,y:220},{x:220,y:220},{x:220,y:420},{x:490,y:420},{x:490,y:180},{x:800,y:180},{x:800,y:500},{x:1180,y:500}],
-        pads: [{x:140,y:140},{x:330,y:320},{x:370,y:500},{x:560,y:320},{x:660,y:120},{x:720,y:300},{x:900,y:260},{x:960,y:570}],
-        waves: [[["grunt",10]],[["grunt",14]],[["grunt",15],["boss",1]]]
-      },
-      {
-        name: "Route du canyon",
-        enemy: "fast",
-        path: [{x:0,y:120},{x:300,y:120},{x:300,y:540},{x:540,y:540},{x:540,y:260},{x:820,y:260},{x:820,y:600},{x:1180,y:600}],
-        pads: [{x:170,y:230},{x:210,y:470},{x:420,y:440},{x:450,y:130},{x:640,y:430},{x:700,y:170},{x:930,y:380},{x:1020,y:130}],
-        waves: [[["grunt",10],["fast",6]],[["fast",14],["grunt",10]],[["fast",16],["boss",1]]]
-      },
-      {
-        name: "Bois lourd",
-        enemy: "tank",
-        path: [{x:0,y:320},{x:240,y:320},{x:240,y:150},{x:530,y:150},{x:530,y:510},{x:800,y:510},{x:800,y:220},{x:1180,y:220}],
-        pads: [{x:120,y:430},{x:330,y:250},{x:420,y:560},{x:610,y:360},{x:670,y:100},{x:710,y:600},{x:930,y:360},{x:1040,y:140}],
-        waves: [[["grunt",10],["tank",5]],[["fast",10],["tank",7]],[["tank",10],["boss",1]]]
-      },
-      {
-        name: "Falaises du vent",
-        enemy: "flying",
-        path: [{x:0,y:540},{x:180,y:540},{x:180,y:180},{x:500,y:180},{x:500,y:610},{x:780,y:610},{x:780,y:260},{x:1180,y:260}],
-        pads: [{x:100,y:660},{x:270,y:390},{x:360,y:120},{x:610,y:360},{x:640,y:690},{x:910,y:500},{x:960,y:180},{x:1080,y:340}],
-        waves: [[["flying",10],["grunt",8]],[["flying",14],["fast",10]],[["flying",14],["tank",6],["boss",1]]]
-      },
-      {
-        name: "Fort d'acier",
-        enemy: "shield",
-        path: [{x:0,y:180},{x:260,y:180},{x:260,y:600},{x:560,y:600},{x:560,y:130},{x:910,y:130},{x:910,y:530},{x:1180,y:530}],
-        pads: [{x:120,y:300},{x:360,y:400},{x:420,y:90},{x:650,y:370},{x:690,y:670},{x:820,y:260},{x:1030,y:350},{x:1090,y:610}],
-        waves: [[["shield",8],["grunt",10]],[["shield",10],["fast",12]],[["shield",12],["tank",8],["boss",1]]]
-      },
-      {
-        name: "Désert rapide",
-        enemy: "runner",
-        path: [{x:0,y:400},{x:220,y:400},{x:220,y:130},{x:460,y:130},{x:460,y:530},{x:760,y:530},{x:760,y:190},{x:1180,y:190}],
-        pads: [{x:110,y:280},{x:310,y:290},{x:350,y:620},{x:560,y:350},{x:610,y:70},{x:840,y:410},{x:920,y:110},{x:1050,y:300}],
-        waves: [[["runner",14],["fast",10]],[["runner",20],["shield",8]],[["runner",18],["tank",8],["boss",1]]]
-      },
-      {
-        name: "Temple violet",
-        enemy: "healer",
-        path: [{x:0,y:250},{x:200,y:250},{x:200,y:620},{x:520,y:620},{x:520,y:170},{x:820,y:170},{x:820,y:560},{x:1180,y:560}],
-        pads: [{x:100,y:120},{x:320,y:430},{x:420,y:90},{x:620,y:380},{x:660,y:690},{x:910,y:320},{x:980,y:100},{x:1100,y:430}],
-        waves: [[["healer",8],["shield",8],["grunt",10]],[["healer",10],["runner",14],["tank",6]],[["healer",10],["shield",10],["boss",2]]]
-      }
-    ];
-
-    const EXTRA_PADS = [
-      [{x:250,y:120},{x:620,y:520},{x:1040,y:420}],
-      [{x:120,y:360},{x:600,y:120},{x:1040,y:520}],
-      [{x:220,y:240},{x:570,y:610},{x:980,y:260}],
-      [{x:120,y:420},{x:560,y:90},{x:1030,y:600}],
-      [{x:170,y:520},{x:720,y:520},{x:1080,y:220}],
-      [{x:140,y:480},{x:520,y:220},{x:980,y:560}],
-      [{x:160,y:360},{x:700,y:80},{x:1060,y:620}]
-    ];
-
-    // =====================================================
-    // CLASSES
-    // =====================================================
-    class Enemy {
-      constructor(type, path, hpMul = 1, speedMul = 1) {
-        const s = ENEMIES[type];
-        this.type = type;
-        this.path = path;
-        this.index = 0;
-        this.x = path[0].x;
-        this.y = path[0].y;
-        this.maxHp = s.hp * hpMul;
-        this.hp = this.maxHp;
-        this.speed = s.speed * speedMul;
-        this.reward = s.reward;
-        this.color = s.color;
-        this.size = s.size;
-        this.armor = s.armor;
-        this.dead = false;
-        this.reached = false;
-        this.slowFactor = 1;
-        this.slowTimer = 0;
-        this.healTimer = 90;
-      }
-
-      update(enemies) {
-        if (this.dead || this.reached) return;
-
-        if (this.slowTimer > 0) this.slowTimer--;
-        else this.slowFactor = 1;
-
-        if (this.type === "healer") {
-          this.healTimer--;
-          if (this.healTimer <= 0) {
-            this.healTimer = 90;
-            for (const e of enemies) {
-              if (e !== this && !e.dead && !e.reached && dist(this, e) <= 70) {
-                e.hp = Math.min(e.maxHp, e.hp + 10);
-              }
-            }
-          }
-        }
-
-        if (this.index >= this.path.length - 1) {
-          this.reached = true;
-          return;
-        }
-
-        const target = this.path[this.index + 1];
-        const dx = target.x - this.x;
-        const dy = target.y - this.y;
-        const d = Math.hypot(dx, dy);
-        const spd = this.speed * this.slowFactor;
-
-        if (d <= spd) {
-          this.x = target.x;
-          this.y = target.y;
-          this.index++;
-        } else {
-          this.x += dx / d * spd;
-          this.y += dy / d * spd;
-        }
-      }
-
-      damage(amount) {
-        const real = Math.max(1, amount * (1 - this.armor));
-        this.hp -= real;
-        if (this.hp <= 0) this.dead = true;
-      }
-
-      slow(factor, time) {
-        if (factor < this.slowFactor) {
-          this.slowFactor = factor;
-          this.slowTimer = time;
-        }
-      }
-
-      draw() {
-        circle(this.x, this.y, this.size, this.color);
-
-        if (this.type === "shield") circle(this.x, this.y, this.size + 3, null, C.white, 2);
-
-        if (this.type === "healer") {
-          ctx.strokeStyle = C.white;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(this.x - 5, this.y);
-          ctx.lineTo(this.x + 5, this.y);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(this.x, this.y - 5);
-          ctx.lineTo(this.x, this.y + 5);
-          ctx.stroke();
-        }
-
-        if (this.type === "boss") circle(this.x, this.y, 8, C.red);
-
-        const w = this.size * 2.5;
-        const ratio = Math.max(0, this.hp / this.maxHp);
-        ctx.fillStyle = "#461414";
-        ctx.fillRect(this.x - w / 2, this.y - this.size - 16, w, 6);
-        ctx.fillStyle = C.green;
-        ctx.fillRect(this.x - w / 2, this.y - this.size - 16, w * ratio, 6);
-      }
-    }
-
-    class Projectile {
-      constructor(x, y, target, damage, color, speed = 6, splash = 0, slow = null) {
-        this.x = x;
-        this.y = y;
-        this.target = target;
-        this.damage = damage;
-        this.color = color;
-        this.speed = speed;
-        this.splash = splash;
-        this.slow = slow;
-        this.dead = false;
-      }
-
-      update(enemies) {
-        if (this.dead || this.target.dead || this.target.reached) {
-          this.dead = true;
-          return;
-        }
-
-        const dx = this.target.x - this.x;
-        const dy = this.target.y - this.y;
-        const d = Math.hypot(dx, dy);
-
-        if (d <= this.speed || d === 0) {
-          this.hit(enemies);
-          this.dead = true;
-        } else {
-          this.x += dx / d * this.speed;
-          this.y += dy / d * this.speed;
-        }
-      }
-
-      hit(enemies) {
-        if (this.splash > 0) {
-          for (const e of enemies) {
-            if (!e.dead && !e.reached && dist(this.target, e) <= this.splash) {
-              e.damage(this.damage);
-              if (this.slow) e.slow(this.slow.factor, this.slow.time);
-            }
-          }
-        } else {
-          this.target.damage(this.damage);
-          if (this.slow) this.target.slow(this.slow.factor, this.slow.time);
-        }
-      }
-
-      draw() {
-        circle(this.x, this.y, 5, this.color);
-      }
-    }
-
-    class Tower {
-      constructor(x, y, type, damageMul = 1, hard = false) {
-        const s = TOWERS[type];
-        this.x = x;
-        this.y = y;
-        this.type = type;
-        this.range = s.range;
-        this.damage = s.damage * damageMul;
-        this.cooldownMax = s.cooldown;
-        this.cooldown = 0;
-        this.color = s.color;
-        this.label = s.label;
-        this.level = 1;
-        this.specialization = null;
-
-        if (type === "cannon" && hard) {
-          this.damage *= 0.70;
-          this.cooldownMax = Math.floor(this.cooldownMax * 1.20);
-          this.range *= 0.96;
-        }
-      }
-
-      upgradeCost() {
-        if (this.level >= 4) return null;
-        return Math.floor(42 + this.level * 38);
-      }
-
-      specCost() {
-        return 220;
-      }
-
-      sellValue() {
-        let total = TOWERS[this.type].cost;
-        for (let lvl = 1; lvl < this.level; lvl++) {
-          total += Math.floor(42 + lvl * 38);
-        }
-        if (this.specialization) total += this.specCost();
-        return Math.floor(total * 0.70);
-      }
-
-      upgrade() {
-        if (this.level >= 4) return false;
-        this.level++;
-        this.damage *= 1.18;
-        this.range += 6;
-        this.cooldownMax = Math.max(18, Math.floor(this.cooldownMax * 0.95));
-        return true;
-      }
-
-      specialize(spec) {
-        if (this.level < 4 || this.specialization) return false;
-        this.specialization = spec;
-
-        if (spec === "sniper") {
-          this.label = "Sniper";
-          this.damage *= 2.1;
-          this.range += 80;
-          this.cooldownMax *= 1.35;
-        }
-
-        if (spec === "multishot") {
-          this.label = "Multi";
-          this.damage *= 0.75;
-          this.cooldownMax = Math.max(12, this.cooldownMax * 0.55);
-        }
-
-        if (spec === "mega_bomb") {
-          this.label = "Mega Canon";
-          this.damage *= 1.45;
-          this.range += 15;
-        }
-
-        if (spec === "fire") {
-          this.label = "Canon Feu";
-          this.damage *= 1.25;
-          this.cooldownMax = Math.max(18, this.cooldownMax * 0.82);
-        }
-
-        if (spec === "deep_freeze") {
-          this.label = "Gel Profond";
-          this.damage *= 1.15;
-          this.range += 30;
-        }
-
-        if (spec === "aura") {
-          this.label = "Aura Givre";
-          this.range += 45;
-          this.cooldownMax = Math.max(18, this.cooldownMax * 0.75);
-        }
-
-        this.cooldownMax = Math.floor(this.cooldownMax);
-        return true;
-      }
-
-      update(enemies, projectiles) {
-        if (this.cooldown > 0) {
-          this.cooldown--;
-          return;
-        }
-
-        const targets = enemies
-          .filter(e => !e.dead && !e.reached && dist(this, e) <= this.range)
-          .sort((a, b) => b.index - a.index || dist(this, a) - dist(this, b));
-
-        if (targets.length === 0) return;
-
-        const chosen = this.specialization === "multishot" ? targets.slice(0, 3) : [targets[0]];
-
-        for (const target of chosen) {
-          if (this.type === "archer") {
-            projectiles.push(new Projectile(this.x, this.y, target, this.damage, C.green, 8));
-          }
-
-          if (this.type === "cannon") {
-            const splash = this.specialization === "mega_bomb" ? 75 : TOWERS.cannon.splash;
-            projectiles.push(new Projectile(this.x, this.y, target, this.damage, C.orange, 5, splash));
-          }
-
-          if (this.type === "frost") {
-            let factor = 0.58;
-            let time = 120;
-
-            if (this.specialization === "deep_freeze") {
-              factor = 0.38;
-              time = 180;
-            }
-
-            if (this.specialization === "aura") {
-              factor = 0.50;
-              time = 150;
-            }
-
-            projectiles.push(
-              new Projectile(this.x, this.y, target, this.damage, C.blue, 7, 0, { factor, time })
-            );
-          }
-        }
-
-        this.cooldown = this.cooldownMax;
-      }
-
-      draw(selected) {
-        circle(this.x, this.y, 20, this.color, C.black, 2);
-
-        if (this.specialization) circle(this.x, this.y, 25, null, C.yellow, 3);
-
-        if (this.type === "archer") {
-          ctx.strokeStyle = C.white;
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.moveTo(this.x - 7, this.y + 7);
-          ctx.lineTo(this.x + 8, this.y - 8);
-          ctx.stroke();
-        }
-
-        if (this.type === "cannon") circle(this.x, this.y, 8, C.black);
-
-        if (this.type === "frost") circle(this.x, this.y, 8, null, C.white, 2);
-
-        if (selected) {
-          circle(this.x, this.y, this.range, null, C.white, 1);
-          circle(this.x, this.y, 24, null, C.yellow, 3);
-        }
-      }
-    }
-
-    // =====================================================
-    // GAME
-    // =====================================================
-    class Game {
-      constructor() {
-        this.state = "menu";
-        this.mode = "normal";
-
-        this.selectedBuild = "archer";
-        this.selectedTower = null;
-        this.previewPad = null;
-
-        this.levelIndex = 0;
-        this.inEndless = false;
-        this.cycle = 0;
-        this.stage = 0;
-
-        this.metaGold = 0;
-        this.bonusLife = 0;
-        this.bonusGold = 0;
-        this.bonusDamage = 0;
-
-        this.score = 0;
-        this.endlessTimer = 0;
-        this.endlessSpawn = 0;
-        this.scoreSubmitted = false;
-
-        this.effects = [];
-
-        this.resetLevel(true);
-      }
-
-      resetLevel(full = false) {
-        if (full) {
-          this.levelIndex = 0;
-          this.inEndless = false;
-          this.cycle = 0;
-          this.stage = 0;
-        }
-
-        this.level = LEVELS[this.levelIndex];
-        this.path = this.level.path;
-        this.pads = this.level.pads.map(p => ({ x: p.x, y: p.y }));
-        this.lockedPads = (EXTRA_PADS[this.levelIndex] || []).map(p => ({ x: p.x, y: p.y }));
-        this.waves = this.level.waves;
-
-        this.life = 20 + this.bonusLife;
-        this.gold = 120 + this.bonusGold;
-
-        if (this.mode === "hard") {
-          this.life = Math.max(8, this.life - 4);
-          this.gold = Math.max(70, this.gold - 20);
-        }
-
-        if (this.mode === "endless_plus") {
-          this.life = 30;
-          this.gold = 180;
-          this.inEndless = true;
-          this.levelIndex = 0;
-        }
-
-        this.waveIndex = 0;
-        this.towers = [];
-        this.enemies = [];
-        this.projectiles = [];
-        this.waveQueue = [];
-        this.spawnTimer = 0;
-        this.waveActive = false;
-        this.betweenWaves = true;
-        this.selectedTower = null;
-        this.previewPad = null;
-      }
-
-      start(mode) {
-        this.mode = mode;
-        this.metaGold = 0;
-        this.bonusLife = 0;
-        this.bonusGold = 0;
-        this.bonusDamage = 0;
-
-        this.score = 0;
-        this.endlessTimer = 0;
-        this.endlessSpawn = 0;
-        this.scoreSubmitted = false;
-
-        this.levelIndex = 0;
-        this.inEndless = false;
-        this.cycle = 0;
-        this.stage = 0;
-
-        this.effects = [];
-        this.resetLevel(true);
-        this.state = "playing";
-      }
-
-      effect(x, y, msg, color = C.yellow) {
-        this.effects.push({ x, y, msg, color, time: 35 });
-      }
-
-      updateEffects() {
-        for (const e of this.effects) {
-          e.y -= 1;
-          e.time--;
-        }
-        this.effects = this.effects.filter(e => e.time > 0);
-      }
-
-      drawEffects() {
-        for (const e of this.effects) {
-          text(e.msg, e.x, e.y, 20, e.color, "center");
-        }
-      }
-
-      displayLevel() {
-        if (this.mode === "endless_plus") return "Infini+";
-        if (!this.inEndless) return String(this.levelIndex + 1);
-        return `${this.cycle}.${this.stage}`;
-      }
-
-      towerPenalty() {
-        if (this.mode === "hard") return 0.78;
-        if (!this.inEndless || this.mode === "endless_plus") return 1;
-        return Math.max(0.45, 1 - this.cycle * 0.04 - (this.stage - 1) * 0.015);
-      }
-
-      enemyMultiplier() {
-        if (!this.inEndless || this.mode === "endless_plus") return 1;
-        return 1 + this.cycle * 0.22 + (this.stage - 1) * 0.08;
-      }
-
-      occupied(pad) {
-        return this.towers.some(t => t.x === pad.x && t.y === pad.y);
-      }
-
-      towerAt(p) {
-        return [...this.towers].reverse().find(t => dist(t, p) <= 24) || null;
-      }
-
-      padAt(p) {
-        return this.pads.find(pad => dist(pad, p) <= 26) || null;
-      }
-
-      lockedPadAt(p) {
-        return this.lockedPads.find(pad => dist(pad, p) <= 26) || null;
-      }
-
-      previewRange() {
-        let r = TOWERS[this.selectedBuild].range;
-        if (this.selectedBuild === "cannon" && this.mode === "hard") r *= 0.96;
-        return r;
-      }
-
-      buyLockedPad(pad) {
-        if (this.gold < EXTRA_PAD_COST) {
-          this.effect(pad.x, pad.y, "Pas assez", C.red);
-          return;
-        }
-
-        this.gold -= EXTRA_PAD_COST;
-        this.pads.push(pad);
-        this.lockedPads = this.lockedPads.filter(p => p !== pad);
-        this.effect(pad.x, pad.y, "Acheté !", C.green);
-      }
-
-      buildTower(pad) {
-        if (this.occupied(pad)) return;
-
-        const cost = TOWERS[this.selectedBuild].cost;
-
-        if (this.gold < cost) {
-          this.effect(pad.x, pad.y, "Pas assez", C.red);
-          return;
-        }
-
-        this.gold -= cost;
-        const mul = (1 + this.bonusDamage) * this.towerPenalty();
-        this.towers.push(new Tower(pad.x, pad.y, this.selectedBuild, mul, this.mode === "hard"));
-        this.effect(pad.x, pad.y, "OK", C.green);
-      }
-
-      sellTower() {
-        if (!this.selectedTower) return;
-
-        const v = this.selectedTower.sellValue();
-        this.gold += v;
-        this.effect(this.selectedTower.x, this.selectedTower.y, `+${v}`, C.yellow);
-
-        this.towers = this.towers.filter(t => t !== this.selectedTower);
-        this.selectedTower = null;
-      }
-
-      buyMeta(b) {
-        if (this.metaGold < b.cost) {
-          this.effect(W / 2, 130, "Pas assez", C.red);
-          return;
-        }
-
-        this.metaGold -= b.cost;
-
-        if (b.key === "life") this.bonusLife += b.value;
-        if (b.key === "gold") this.bonusGold += b.value;
-        if (b.key === "damage") this.bonusDamage += b.value;
-
-        this.effect(W / 2, 130, "Acheté !", C.green);
-      }
-
-      specialize(n) {
-        const t = this.selectedTower;
-        if (!t || t.level < 4 || t.specialization) return;
-
-        const cost = t.specCost();
-
-        if (this.gold < cost) {
-          this.effect(t.x, t.y, "Pas assez", C.red);
-          return;
-        }
-
-        let spec;
-
-        if (t.type === "archer") spec = n === 1 ? "sniper" : "multishot";
-        if (t.type === "cannon") spec = n === 1 ? "mega_bomb" : "fire";
-        if (t.type === "frost") spec = n === 1 ? "deep_freeze" : "aura";
-
-        this.gold -= cost;
-        t.specialize(spec);
-        this.effect(t.x, t.y, "SPEC!", C.purple);
-      }
-
-      endlessWaveData(w) {
-        const scale = this.cycle + this.stage;
-
-        if (w === 0) {
-          return [["grunt", 10 + scale * 2], ["fast", 6 + scale]];
-        }
-
-        if (w === 1) {
-          return [
-            ["tank", 5 + Math.floor(scale / 2)],
-            ["flying", 8 + scale],
-            ["shield", 5 + Math.floor(scale / 2)]
-          ];
-        }
-
-        return [
-          ["runner", 10 + scale],
-          ["healer", 4 + Math.floor(scale / 2)],
-          ["boss", 1 + Math.floor(this.cycle / 3)]
-        ];
-      }
-
-      currentWaveData() {
-        if (!this.inEndless) return this.waves[this.waveIndex];
-        return this.endlessWaveData(this.waveIndex);
-      }
-
-      startWave() {
-        if (this.mode === "endless_plus") return;
-
-        const max = this.inEndless ? 3 : this.waves.length;
-        if (this.waveIndex >= max) return;
-
-        this.waveQueue = [];
-
-        for (const [type, count] of this.currentWaveData()) {
-          for (let i = 0; i < count; i++) {
-            this.waveQueue.push(type);
-          }
-        }
-
-        this.waveQueue.sort(() => Math.random() - 0.5);
-        this.waveActive = true;
-        this.betweenWaves = false;
-        this.spawnTimer = 0;
-        this.previewPad = null;
-        this.selectedTower = null;
-      }
-
-      spawn(type) {
-        let hpMul = this.enemyMultiplier();
-        let spdMul = 1;
-
-        if (this.mode === "hard") {
-          hpMul *= 1.10;
-          spdMul *= 1.04;
-        }
-
-        this.enemies.push(new Enemy(type, this.path, hpMul, spdMul));
-      }
-
-      updateEndlessPlus() {
-        this.endlessTimer++;
-
-        const seconds = this.endlessTimer / FPS;
-        const difficulty = 1 + seconds / 90;
-
-        this.endlessSpawn--;
-        const delay = Math.max(12, Math.floor(70 / difficulty));
-
-        if (this.endlessSpawn <= 0) {
-          this.endlessSpawn = delay;
-
-          const pool = ["grunt"];
-
-          if (seconds > 30) pool.push("fast");
-          if (seconds > 60) pool.push("tank");
-          if (seconds > 90) pool.push("flying");
-          if (seconds > 130) pool.push("shield");
-          if (seconds > 170) pool.push("runner");
-          if (seconds > 220) pool.push("healer");
-          if (seconds > 300) pool.push("boss");
-
-          const type = pool[Math.floor(Math.random() * pool.length)];
-          const hpMul = difficulty;
-          const spdMul = 1 + Math.min(0.65, seconds / 900);
-
-          this.enemies.push(new Enemy(type, this.path, hpMul, spdMul));
-        }
-      }
-
-      finishGame() {
-        this.state = "game_over";
-      }
-
-      async addScoreToLeaderboard() {
-        if (this.mode !== "endless_plus") return;
-
-        if (this.score <= 0) {
-          alert("Score invalide.");
-          return;
-        }
-
-        if (this.scoreSubmitted) {
-          alert("Ce score a déjà été ajouté.");
-          return;
-        }
-
-        const pseudo = prompt("Entre ton pseudo :", "Paul");
-        if (!pseudo || !pseudo.trim()) return;
-
-        const password = prompt(`Mot de passe pour "${pseudo.trim().slice(0, 16)}" :`);
-        if (!password) return;
-
-        const result = await submitScoreOnline(pseudo, password, this.score);
-
-        if (!result.ok) {
-          alert("Erreur : " + result.message);
-          return;
-        }
-
-        this.scoreSubmitted = true;
-        alert(result.message);
-      }
-
-      update() {
-        this.updateEffects();
-
-        if (this.state !== "playing") return;
-
-        if (this.mode === "endless_plus") {
-          this.updateEndlessPlus();
-        }
-
-        if (this.mode !== "endless_plus" && this.waveActive) {
-          this.spawnTimer--;
-
-          if (this.waveQueue.length > 0 && this.spawnTimer <= 0) {
-            this.spawn(this.waveQueue.shift());
-            this.spawnTimer = 18 + Math.floor(Math.random() * 17);
-          }
-        }
-
-        for (const e of this.enemies) e.update(this.enemies);
-
-        let leaked = 0;
-
-        for (const e of this.enemies) {
-          if (e.reached && !e.dead) {
-            leaked += e.type === "boss" ? 2 : 1;
-            e.dead = true;
-          }
-        }
-
-        this.life -= leaked;
-
-        for (const t of this.towers) t.update(this.enemies, this.projectiles);
-        for (const p of this.projectiles) p.update(this.enemies);
-
-        for (const e of this.enemies) {
-          if (e.dead && e.hp <= 0) {
-            let reward = e.reward;
-
-            if (this.mode === "hard") {
-              reward = Math.max(1, Math.floor(reward * 0.90));
-            }
-
-            if (this.inEndless && this.mode !== "endless_plus") {
-              reward = Math.max(1, Math.floor(reward * 0.85));
-            }
-
-            this.gold += reward;
-            this.metaGold += reward;
-
-            if (this.mode === "endless_plus") {
-              this.score += reward * 10;
-            }
-
-            e.hp = 999999;
-          }
-        }
-
-        this.enemies = this.enemies.filter(e => !(e.dead && e.hp > 100000) && !(e.dead && e.reached));
-        this.projectiles = this.projectiles.filter(p => !p.dead);
-
-        if (this.life <= 0) {
-          this.finishGame();
-          return;
-        }
-
-        if (this.mode === "endless_plus") return;
-
-        const activeLeft = this.enemies.some(e => !e.dead && !e.reached);
-
-        if (this.waveActive && this.waveQueue.length === 0 && !activeLeft) {
-          this.waveActive = false;
-          this.betweenWaves = true;
-          this.waveIndex++;
-
-          const bonus = this.mode === "hard" ? 20 : 35;
-          this.gold += bonus;
-          this.metaGold += bonus;
-        }
-
-        const max = this.inEndless ? 3 : this.waves.length;
-
-        if (this.waveIndex >= max && this.betweenWaves && !this.waveActive) {
-          this.state = "level_complete";
-        }
-      }
-
-      nextLevel() {
-        let reward = this.mode === "hard" ? 35 : 65;
-        if (this.inEndless) reward = Math.floor(reward * 0.75);
-
-        this.metaGold += reward;
-
-        if (!this.inEndless) {
-          this.levelIndex++;
-
-          if (this.levelIndex >= LEVELS.length) {
-            this.inEndless = true;
-            this.cycle = 1;
-            this.stage = 1;
-            this.levelIndex = 0;
-          }
-        } else {
-          this.stage++;
-          this.levelIndex++;
-
-          if (this.levelIndex >= LEVELS.length) {
-            this.levelIndex = 0;
-            this.cycle++;
-            this.stage = 1;
-          }
-        }
-
-        this.resetLevel(false);
-        this.state = "playing";
-      }
-
-      click(p) {
-        if (this.state === "menu") {
-          if (inside(p, this.btnNormal)) this.start("normal");
-          else if (inside(p, this.btnHard)) this.start("hard");
-          else if (inside(p, this.btnInfini)) this.start("endless_plus");
-          else if (inside(p, this.btnRefreshLeaderboard)) refreshLeaderboard();
-          return;
-        }
-
-        if (this.state === "game_over") {
-          if (inside(p, this.btnRestart)) this.state = "menu";
-          if (this.mode === "endless_plus" && inside(p, this.btnAddScore)) this.addScoreToLeaderboard();
-          if (inside(p, this.btnRefreshLeaderboard)) refreshLeaderboard();
-          return;
-        }
-
-        if (this.state === "level_complete") {
-          for (const item of this.metaRects) {
-            if (inside(p, item.rect)) {
-              this.buyMeta(item.bonus);
-              return;
-            }
-          }
-
-          if (inside(p, this.btnNext)) this.nextLevel();
-          return;
-        }
-
-        if (this.state !== "playing") return;
-
-        if (inside(p, this.btnArcher)) {
-          this.selectedBuild = "archer";
-          this.selectedTower = null;
-          return;
-        }
-
-        if (inside(p, this.btnCannon)) {
-          this.selectedBuild = "cannon";
-          this.selectedTower = null;
-          return;
-        }
-
-        if (inside(p, this.btnFrost)) {
-          this.selectedBuild = "frost";
-          this.selectedTower = null;
-          return;
-        }
-
-        if (inside(p, this.btnWave) && this.betweenWaves && this.mode !== "endless_plus") {
-          this.startWave();
-          return;
-        }
-
-        if (inside(p, this.btnUpgrade) && this.selectedTower) {
-          const cost = this.selectedTower.upgradeCost();
-
-          if (cost !== null && this.gold >= cost) {
-            this.gold -= cost;
-            this.selectedTower.upgrade();
-            this.effect(this.selectedTower.x, this.selectedTower.y, "UP!", C.green);
-          } else if (cost !== null) {
-            this.effect(this.selectedTower.x, this.selectedTower.y, "Pas assez", C.red);
-          }
-
-          return;
-        }
-
-        if (inside(p, this.btnSell) && this.selectedTower) {
-          this.sellTower();
-          return;
-        }
-
-        if (inside(p, this.btnSpec1) && this.selectedTower) {
-          this.specialize(1);
-          return;
-        }
-
-        if (inside(p, this.btnSpec2) && this.selectedTower) {
-          this.specialize(2);
-          return;
-        }
-
-        const t = this.towerAt(p);
-
-        if (t) {
-          this.selectedTower = t;
-          this.previewPad = null;
-          return;
-        }
-
-        const locked = this.lockedPadAt(p);
-
-        if (locked) {
-          this.buyLockedPad(locked);
-          this.selectedTower = null;
-          this.previewPad = null;
-          return;
-        }
-
-        const pad = this.padAt(p);
-
-        if (pad && !this.occupied(pad)) {
-          this.selectedTower = null;
-
-          if (this.previewPad !== pad) {
-            this.previewPad = pad;
-            return;
-          }
-
-          this.buildTower(pad);
-          this.previewPad = null;
-          return;
-        }
-
-        this.selectedTower = null;
-        this.previewPad = null;
-      }
-
-      drawBackground() {
-        ctx.fillStyle = C.bg;
-        ctx.fillRect(0, 0, W, H);
-
-        ctx.fillStyle = C.panel;
-        ctx.fillRect(0, 0, W, TOP);
-        ctx.fillRect(0, H - BOTTOM, W, BOTTOM);
-
-        ctx.strokeStyle = C.path;
-        ctx.lineWidth = 42;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.beginPath();
-        ctx.moveTo(this.path[0].x, this.path[0].y);
-        for (const p of this.path.slice(1)) ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-
-        ctx.strokeStyle = "#785a3c";
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.moveTo(this.path[0].x, this.path[0].y);
-        for (const p of this.path.slice(1)) ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-
-        for (const p of this.pads) {
-          circle(p.x, p.y, 26, this.occupied(p) ? C.dark : C.lightGray, C.white, 2);
-        }
-
-        for (const p of this.lockedPads) {
-          circle(p.x, p.y, 26, "#3b1f1f", C.red, 3);
-          text("+", p.x, p.y - 2, 24, C.yellow, "center");
-          text("2500", p.x, p.y + 28, 14, C.yellow, "center");
-        }
-
-        if (this.previewPad) {
-          ctx.save();
-          ctx.globalAlpha = 0.25;
-          circle(this.previewPad.x, this.previewPad.y, this.previewRange(), C.white);
-          ctx.restore();
-
-          circle(this.previewPad.x, this.previewPad.y, this.previewRange(), null, C.white, 2);
-          circle(this.previewPad.x, this.previewPad.y, 28, null, C.yellow, 3);
-        }
-      }
-
-      drawHud() {
-        text(`Mode : ${this.mode.toUpperCase()}`, 20, 35, 21);
-        text(`Niveau : ${this.displayLevel()} - ${this.level.name}`, 210, 35, 21);
-        text(`Vie : ${this.life}`, 560, 35, 21);
-        text(`Or : ${this.gold}`, 680, 35, 21, C.yellow);
-
-        if (this.mode === "endless_plus") {
-          text(`Score : ${this.score}`, 810, 35, 21, C.cyan);
-          text(`Temps : ${Math.floor(this.endlessTimer / FPS)}s`, 970, 35, 21);
-        } else {
-          const max = this.inEndless ? 3 : this.waves.length;
-          text(`Vague : ${Math.min(this.waveIndex + (this.betweenWaves ? 0 : 1), max)}/${max}`, 830, 35, 21);
-        }
-
-        this.btnWave = button(
-          1040,
-          15,
-          145,
-          40,
-          this.mode === "endless_plus" ? "Infini" : (this.betweenWaves ? "Lancer" : "En cours"),
-          this.betweenWaves ? C.green : C.gray
-        );
-      }
-
-      drawEntities() {
-        for (const t of this.towers) t.draw(t === this.selectedTower);
-        for (const p of this.projectiles) p.draw();
-        for (const e of this.enemies) e.draw();
-      }
-
-      drawBottom() {
-        const y = H - BOTTOM + 16;
-
-        this.btnArcher = button(20, y, 145, 46, "Archer", this.selectedBuild === "archer" ? C.green : C.dark);
-        this.btnCannon = button(175, y, 145, 46, "Canon", this.selectedBuild === "cannon" ? C.orange : C.dark);
-        this.btnFrost = button(330, y, 145, 46, "Givre", this.selectedBuild === "frost" ? C.blue : C.dark);
-
-        this.btnUpgrade = button(495, y, 155, 46, "Améliorer", this.selectedTower ? C.purple : C.dark);
-        this.btnSell = button(495, y + 56, 155, 38, "Vendre", this.selectedTower ? C.red : C.dark);
-
-        const specOK = this.selectedTower && this.selectedTower.level >= 4 && !this.selectedTower.specialization;
-        this.btnSpec1 = button(665, y, 145, 46, "Spé 1", specOK ? C.cyan : C.dark);
-        this.btnSpec2 = button(665, y + 56, 145, 38, "Spé 2", specOK ? C.cyan : C.dark);
-
-        rect(830, y, 350, 112, C.dark, C.white, 14);
-
-        if (this.selectedTower) {
-          const t = this.selectedTower;
-          const up = t.upgradeCost();
-          const spec = SPEC_INFO[t.type];
-
-          text(`${t.label} niv ${t.level}/4`, 845, y + 15, 18);
-          text(`Dégâts ${Math.floor(t.damage)} | Portée ${Math.floor(t.range)}`, 845, y + 37, 15);
-          text(`Vente : ${t.sellValue()}`, 845, y + 58, 15, C.yellow);
-          text(up === null ? `Spé : ${t.specCost()}` : `Upgrade : ${up}`, 965, y + 58, 15, C.cyan);
-
-          if (up === null && !t.specialization) {
-            text(`1 ${spec.one.name}: ${spec.one.desc}`, 845, y + 80, 12, C.white);
-            text(`2 ${spec.two.name}: ${spec.two.desc}`, 845, y + 98, 12, C.white);
-          } else if (t.specialization) {
-            text(`Spécialisation : ${t.label}`, 845, y + 85, 14, C.purple);
-          }
-        } else if (this.previewPad) {
-          const tower = TOWERS[this.selectedBuild];
-          const spec = SPEC_INFO[this.selectedBuild];
-
-          text(`Preview : ${tower.label} (${tower.cost})`, 845, y + 17, 18);
-          text(`Portée : ${Math.floor(this.previewRange())}`, 845, y + 39, 15, C.cyan);
-          text(`Upgrade niv 2 : ${Math.floor(42 + 1 * 38)} | Spé niv 4 : 220`, 845, y + 60, 14, C.yellow);
-          text(`Spé 1 ${spec.one.name}: ${spec.one.desc}`, 845, y + 81, 12, C.white);
-          text(`Spé 2 ${spec.two.name}: ${spec.two.desc}`, 845, y + 99, 12, C.white);
-        } else {
-          text("1 clic socle = portée", 845, y + 25, 18);
-          text("2e clic = construire", 845, y + 50, 15, C.cyan);
-          text(`Socle rouge = acheter emplacement (${EXTRA_PAD_COST})`, 845, y + 76, 14, C.yellow);
-        }
-      }
-
-      drawLeaderboard(x, y, compact = false) {
-        text("Leaderboard Infini+", x, y, compact ? 18 : 22, C.yellow, "center");
-
-        if (!supabaseClient) {
-          text("Supabase non configuré", x, y + 30, 15, C.red, "center");
-          return;
-        }
-
-        if (!leaderboardReady) {
-          text("Chargement...", x, y + 30, 16, C.lightGray, "center");
-          return;
-        }
-
-        if (leaderboardCache.length === 0) {
-          text("Aucun score pour l'instant", x, y + 30, 16, C.lightGray, "center");
-          return;
-        }
-
-        const max = compact ? 5 : 10;
-
-        for (let i = 0; i < Math.min(leaderboardCache.length, max); i++) {
-          const e = leaderboardCache[i];
-          text(`${i + 1}. ${e.pseudo} - ${e.score}`, x, y + 30 + i * 23, compact ? 15 : 17, C.white, "center");
-        }
-      }
-
-      drawMenu() {
-        ctx.fillStyle = "#285078";
-        ctx.fillRect(0, 0, W, H);
-
-        text("Tower Defense Web", W / 2, 75, 42, C.white, "center");
-        text("Version complète avec Supabase", W / 2, 120, 22, C.white, "center");
-
-        this.btnNormal = button(W / 2 - 180, 185, 360, 58, "NORMAL", C.green);
-        this.btnHard = button(W / 2 - 180, 260, 360, 58, "HARD", C.red);
-        this.btnInfini = button(W / 2 - 180, 335, 360, 58, "INFINI +", C.purple);
-
-        this.btnRefreshLeaderboard = button(W / 2 - 145, 420, 290, 45, "Rafraîchir leaderboard", C.dark);
-
-        this.drawLeaderboard(W / 2, 500, true);
-      }
-
-      drawLevelComplete() {
-        ctx.fillStyle = "#1e3250";
-        ctx.fillRect(0, 0, W, H);
-
-        text("Niveau terminé !", W / 2, 80, 46, C.white, "center");
-        text(`Or campagne : ${this.metaGold}`, W / 2, 140, 24, C.yellow, "center");
-
-        this.metaRects = [];
-        let y = 210;
-
-        for (const b of META) {
-          const r = { x: 180, y, w: 840, h: 75 };
-
-          rect(r.x, r.y, r.w, r.h, C.panel, C.white, 14);
-          text(b.name, r.x + 20, r.y + 22, 22);
-          text(b.desc, r.x + 20, r.y + 52, 17, C.lightGray);
-          text(`Coût : ${b.cost}`, r.x + r.w - 150, r.y + 38, 22, C.yellow);
-
-          this.metaRects.push({ rect: r, bonus: b });
-          y += 95;
-        }
-
-        this.btnNext = button(W / 2 - 160, 590, 320, 65, "Continuer", C.green);
-        this.drawEffects();
-      }
-
-      drawGameOver() {
-        this.drawBackground();
-        this.drawEntities();
-        this.drawHud();
-        this.drawBottom();
-
-        ctx.fillStyle = "rgba(0,0,0,0.65)";
-        ctx.fillRect(0, 0, W, H);
-
-        text("Défaite", W / 2, 155, 50, C.red, "center");
-
-        if (this.mode === "endless_plus") {
-          text(`Score final : ${this.score}`, W / 2, 220, 32, C.yellow, "center");
-
-          this.btnRestart = button(W / 2 - 315, 610, 280, 60, "Retour menu", C.green);
-          this.btnAddScore = button(
-            W / 2 + 35,
-            610,
-            280,
-            60,
-            this.scoreSubmitted ? "Score ajouté" : "Ajouter score",
-            this.scoreSubmitted ? C.gray : C.purple
-          );
-
-          this.btnRefreshLeaderboard = button(W / 2 - 145, 535, 290, 45, "Rafraîchir leaderboard", C.dark);
-          this.drawLeaderboard(W / 2, 275, false);
-        } else {
-          text(`Tu es arrivé au niveau : ${this.displayLevel()}`, W / 2, 260, 32, C.white, "center");
-          this.btnRestart = button(W / 2 - 150, 360, 300, 65, "Retour menu", C.green);
-        }
-      }
-
-      drawPlaying() {
-        this.drawBackground();
-        this.drawEntities();
-        this.drawHud();
-        this.drawBottom();
-        this.drawEffects();
-      }
-
-      draw() {
-        if (this.state === "menu") this.drawMenu();
-        else if (this.state === "playing") this.drawPlaying();
-        else if (this.state === "level_complete") this.drawLevelComplete();
-        else if (this.state === "game_over") this.drawGameOver();
-      }
-    }
-
-    // =====================================================
-    // LANCEMENT
-    // =====================================================
-    const game = new Game();
-
-    refreshLeaderboard();
-
-    canvas.addEventListener("click", e => {
-      const box = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / box.width;
-      const scaleY = canvas.height / box.height;
-
-      const p = {
-        x: (e.clientX - box.left) * scaleX,
-        y: (e.clientY - box.top) * scaleY
-      };
-
-      game.click(p);
-    });
-
-    function loop() {
-      game.update();
-      game.draw();
-      requestAnimationFrame(loop);
-    }
-
-    loop();
-  </script>
+<h1>Tower Defense - Placement complet</h1>
+<canvas id="game" width="1200" height="720"></canvas>
+<div id="info">Clique sur “+ Socle”, choisis un emplacement, puis Valider ou Annuler.</div>
+
+<script>
+const SUPABASE_URL="https://owgbljtieiopeqtzabrp.supabase.co";
+const SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im93Z2JsanRpZWlvcGVxdHphYnJwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwMTQ2ODksImV4cCI6MjA5MzU5MDY4OX0.yzdSCb9LjIBgeqXlTVtiZzeOM11-0heR6CPVav031N8";
+const supabaseClient=(window.supabase&&SUPABASE_URL.startsWith("https://"))?window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
+
+const canvas=document.getElementById("game"),ctx=canvas.getContext("2d");
+const W=1200,H=720,TOP=70,BOTTOM=155,FPS=60,NEW_PAD_COST=2500;
+const C={white:"#f5f5f5",black:"#151515",dark:"#232832",panel:"#2d3441",gray:"#737b84",light:"#c7ccd1",green:"#3cb45a",red:"#d24646",blue:"#508ce6",yellow:"#e6d246",orange:"#eb913c",purple:"#aa5adc",cyan:"#50d2d2",brown:"#8c6446",pink:"#eb78b4",bg:"#5c915c",path:"#bea578"};
+
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function circle(x,y,r,fill,stroke=null,lw=2){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);if(fill){ctx.fillStyle=fill;ctx.fill()}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw;ctx.stroke()}}
+function rect(x,y,w,h,fill,stroke=null,r=10){ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fillStyle=fill;ctx.fill();if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke()}}
+function text(t,x,y,s=20,c=C.white,a="left"){ctx.fillStyle=c;ctx.font=s+"px Arial";ctx.textAlign=a;ctx.textBaseline="middle";ctx.fillText(t,x,y)}
+function button(x,y,w,h,label,color,s=20){rect(x,y,w,h,color,C.white,10);text(label,x+w/2,y+h/2,s,C.white,"center");return{x,y,w,h}}
+function inside(p,r){return r&&p.x>=r.x&&p.x<=r.x+r.w&&p.y>=r.y&&p.y<=r.y+r.h}
+function distSeg(p,a,b){let dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy;if(!len)return dist(p,a);let t=((p.x-a.x)*dx+(p.y-a.y)*dy)/len;t=Math.max(0,Math.min(1,t));return Math.hypot(p.x-(a.x+t*dx),p.y-(a.y+t*dy))}
+function nearPath(p,path,m=56){for(let i=0;i<path.length-1;i++)if(distSeg(p,path[i],path[i+1])<m)return true;return false}
+
+let leaderboard=[],leaderboardReady=false;
+async function refreshLeaderboard(){
+ if(!supabaseClient){leaderboardReady=true;leaderboard=[];return}
+ const {data,error}=await supabaseClient.rpc("td_get_leaderboard");
+ if(error){console.error(error);leaderboard=[]}else leaderboard=(data||[]).sort((a,b)=>b.score-a.score).slice(0,10);
+ leaderboardReady=true;
+}
+async function submitScore(pseudo,password,score){
+ if(!supabaseClient)return{ok:false,msg:"Supabase non configuré"};
+ const {data,error}=await supabaseClient.rpc("td_submit_score",{p_pseudo:pseudo.trim().slice(0,16),p_password:password,p_score:score});
+ if(error)return{ok:false,msg:error.message};
+ await refreshLeaderboard();
+ return{ok:true,msg:data?.message||"Score ajouté !"};
+}
+
+const ENEMIES={
+ grunt:{hp:55,speed:1.10,reward:10,color:C.red,size:14,armor:0},
+ fast:{hp:35,speed:2.05,reward:9,color:C.yellow,size:11,armor:0},
+ tank:{hp:150,speed:.72,reward:18,color:C.brown,size:18,armor:.10},
+ flying:{hp:45,speed:1.75,reward:12,color:C.cyan,size:12,armor:0},
+ shield:{hp:110,speed:1.05,reward:16,color:C.blue,size:15,armor:.30},
+ runner:{hp:55,speed:2.55,reward:14,color:C.pink,size:11,armor:0},
+ healer:{hp:100,speed:1.0,reward:20,color:C.purple,size:15,armor:0},
+ boss:{hp:600,speed:.68,reward:90,color:C.black,size:28,armor:.20}
+};
+const TOWERS={
+ archer:{cost:70,range:145,damage:18,cooldown:34,color:C.green,label:"Archer"},
+ cannon:{cost:110,range:110,damage:32,cooldown:60,color:C.orange,label:"Canon",splash:45},
+ time:{cost:140,range:170,damage:9,cooldown:42,color:C.purple,label:"Temps"},
+ tesla:{cost:170,range:150,damage:24,cooldown:36,color:C.cyan,label:"Tesla"},
+ titan:{cost:260,range:160,damage:0,cooldown:85,color:C.red,label:"Titan"}
+};
+const SPEC={
+ archer:[["Sniper","Longue portée + gros dégâts"],["Multi-tirs","Tire jusqu'à 3 ennemis"]],
+ cannon:[["Mega Canon","Explosion plus grande"],["Canon Feu","Plus rapide et plus fort"]],
+ time:[["Stase","Chance d'immobiliser"],["Retour","Chance de renvoyer en arrière"]],
+ tesla:[["Tempête","Plus de rebonds"],["Surcharge","Très rapide mais moins de portée"]],
+ titan:[["Exécution","One-shot sous 10% HP"],["Brise-Titan","+50% boss et ignore armure"]]
+};
+const META=[
+ {name:"Coeur renforcé",cost:650,key:"life",value:3,desc:"+3 vies max"},
+ {name:"Bourse royale",cost:600,key:"gold",value:25,desc:"+25 or au début"},
+ {name:"Forge légère",cost:850,key:"damage",value:.08,desc:"+8% dégâts"}
+];
+const LEVELS=[
+ {name:"Plaine du pont",path:[{x:0,y:220},{x:220,y:220},{x:220,y:420},{x:490,y:420},{x:490,y:180},{x:800,y:180},{x:800,y:500},{x:1180,y:500}],pads:[{x:140,y:140},{x:330,y:320},{x:370,y:500},{x:560,y:320},{x:660,y:120},{x:720,y:300},{x:900,y:260},{x:960,y:570}],waves:[[["grunt",10]],[["grunt",14]],[["grunt",15],["boss",1]]]},
+ {name:"Route du canyon",path:[{x:0,y:120},{x:300,y:120},{x:300,y:540},{x:540,y:540},{x:540,y:260},{x:820,y:260},{x:820,y:600},{x:1180,y:600}],pads:[{x:170,y:230},{x:210,y:470},{x:420,y:440},{x:450,y:130},{x:640,y:430},{x:700,y:170},{x:930,y:380},{x:1020,y:130}],waves:[[["grunt",10],["fast",6]],[["fast",14],["grunt",10]],[["fast",16],["boss",1]]]},
+ {name:"Bois lourd",path:[{x:0,y:320},{x:240,y:320},{x:240,y:150},{x:530,y:150},{x:530,y:510},{x:800,y:510},{x:800,y:220},{x:1180,y:220}],pads:[{x:120,y:430},{x:330,y:250},{x:420,y:560},{x:610,y:360},{x:670,y:100},{x:710,y:600},{x:930,y:360},{x:1040,y:140}],waves:[[["grunt",10],["tank",5]],[["fast",10],["tank",7]],[["tank",10],["boss",1]]]},
+ {name:"Falaises du vent",path:[{x:0,y:540},{x:180,y:540},{x:180,y:180},{x:500,y:180},{x:500,y:610},{x:780,y:610},{x:780,y:260},{x:1180,y:260}],pads:[{x:100,y:660},{x:270,y:390},{x:360,y:120},{x:610,y:360},{x:640,y:690},{x:910,y:500},{x:960,y:180},{x:1080,y:340}],waves:[[["flying",10],["grunt",8]],[["flying",14],["fast",10]],[["flying",14],["tank",6],["boss",1]]]},
+ {name:"Fort d'acier",path:[{x:0,y:180},{x:260,y:180},{x:260,y:600},{x:560,y:600},{x:560,y:130},{x:910,y:130},{x:910,y:530},{x:1180,y:530}],pads:[{x:120,y:300},{x:360,y:400},{x:420,y:90},{x:650,y:370},{x:690,y:670},{x:820,y:260},{x:1030,y:350},{x:1090,y:610}],waves:[[["shield",8],["grunt",10]],[["shield",10],["fast",12]],[["shield",12],["tank",8],["boss",1]]]}
+];
+
+class Enemy{
+ constructor(type,path,hpMul=1,spdMul=1){let s=ENEMIES[type];this.type=type;this.path=path;this.i=0;this.x=path[0].x;this.y=path[0].y;this.maxHp=s.hp*hpMul;this.hp=this.maxHp;this.speed=s.speed*spdMul;this.reward=s.reward;this.color=s.color;this.size=s.size;this.armor=s.armor;this.dead=false;this.reached=false;this.slowF=1;this.slowT=0;this.heal=90}
+ update(enemies){if(this.dead||this.reached)return;if(this.slowT>0)this.slowT--;else this.slowF=1;if(this.type==="healer"&&--this.heal<=0){this.heal=90;for(let e of enemies)if(e!==this&&!e.dead&&!e.reached&&dist(this,e)<70)e.hp=Math.min(e.maxHp,e.hp+10)}if(this.i>=this.path.length-1){this.reached=true;return}let t=this.path[this.i+1],dx=t.x-this.x,dy=t.y-this.y,d=Math.hypot(dx,dy),sp=this.speed*this.slowF;if(d<=sp){this.x=t.x;this.y=t.y;this.i++}else{this.x+=dx/d*sp;this.y+=dy/d*sp}}
+ damage(v,ignoreArmor=false){let armor=ignoreArmor?0:this.armor;this.hp-=Math.max(1,v*(1-armor));if(this.hp<=0)this.dead=true}
+ slow(f,t){if(f<this.slowF){this.slowF=f;this.slowT=t}}
+ rewind(){this.i=Math.max(0,this.i-1);let p=this.path[this.i];this.x=p.x;this.y=p.y}
+ draw(){circle(this.x,this.y,this.size,this.color);if(this.type==="shield")circle(this.x,this.y,this.size+3,null,C.white,2);if(this.type==="boss")circle(this.x,this.y,8,C.red);let w=this.size*2.5,r=Math.max(0,this.hp/this.maxHp);ctx.fillStyle="#461414";ctx.fillRect(this.x-w/2,this.y-this.size-16,w,6);ctx.fillStyle=C.green;ctx.fillRect(this.x-w/2,this.y-this.size-16,w*r,6)}
+}
+class Projectile{
+ constructor(x,y,target,dmg,color,speed=7,splash=0){this.x=x;this.y=y;this.t=target;this.dmg=dmg;this.color=color;this.speed=speed;this.splash=splash;this.dead=false}
+ update(enemies){if(this.dead||this.t.dead||this.t.reached){this.dead=true;return}let dx=this.t.x-this.x,dy=this.t.y-this.y,d=Math.hypot(dx,dy);if(d<=this.speed){this.hit(enemies);this.dead=true}else{this.x+=dx/d*this.speed;this.y+=dy/d*this.speed}}
+ hit(enemies){if(this.splash>0){for(let e of enemies)if(!e.dead&&!e.reached&&dist(this.t,e)<=this.splash)e.damage(this.dmg)}else this.t.damage(this.dmg)}
+ draw(){circle(this.x,this.y,5,this.color)}
+}
+class Tower{
+ constructor(x,y,type,mul=1,hard=false){let s=TOWERS[type];this.x=x;this.y=y;this.type=type;this.range=s.range;this.damage=s.damage*mul;this.cool=s.cooldown;this.cd=0;this.color=s.color;this.label=s.label;this.level=1;this.spec=null;if(type==="cannon"&&hard){this.damage*=.7;this.cool=Math.floor(this.cool*1.2);this.range*=.96}}
+ upgradeCost(){return this.level>=4?null:Math.floor(42+this.level*38)}
+ specCost(){return 220}
+ sellValue(){let total=TOWERS[this.type].cost;for(let i=1;i<this.level;i++)total+=Math.floor(42+i*38);if(this.spec)total+=this.specCost();return Math.floor(total*.7)}
+ upgrade(){if(this.level>=4)return false;this.level++;this.damage*=1.18;this.range+=6;this.cool=Math.max(18,Math.floor(this.cool*.95));return true}
+ specialize(n){if(this.level<4||this.spec)return;let sp=["",""];if(this.type==="archer")sp=n===1?["sniper","Sniper"]:["multi","Multi"];if(this.type==="cannon")sp=n===1?["mega","Mega Canon"]:["fire","Canon Feu"];if(this.type==="time")sp=n===1?["stasis","Stase"]:["rewind","Retour"];if(this.type==="tesla")sp=n===1?["storm","Tempête"]:["overload","Surcharge"];if(this.type==="titan")sp=n===1?["execute","Exécution"]:["breaker","Brise-Titan"];this.spec=sp[0];this.label=sp[1];if(this.spec==="sniper"){this.damage*=2.1;this.range+=80;this.cool*=1.35}if(this.spec==="multi"){this.damage*=.75;this.cool=Math.max(12,this.cool*.55)}if(this.spec==="mega"){this.damage*=1.45;this.range+=15}if(this.spec==="fire"){this.damage*=1.25;this.cool=Math.max(18,this.cool*.82)}if(this.spec==="overload"){this.cool=Math.max(12,this.cool*.55);this.range*=.8}this.cool=Math.floor(this.cool)}
+ update(enemies,projectiles){if(this.cd>0){this.cd--;return}let targets=enemies.filter(e=>!e.dead&&!e.reached&&dist(this,e)<=this.range).sort((a,b)=>b.i-a.i||dist(this,a)-dist(this,b));if(!targets.length)return;let chosen=this.spec==="multi"?targets.slice(0,3):[targets[0]];
+  for(let target of chosen){
+   if(this.type==="archer")projectiles.push(new Projectile(this.x,this.y,target,this.damage,C.green,8));
+   if(this.type==="cannon")projectiles.push(new Projectile(this.x,this.y,target,this.damage,C.orange,5,this.spec==="mega"?75:45));
+   if(this.type==="time"){target.damage(this.damage);target.slow(.45,160);if(this.spec==="stasis"&&Math.random()<.12)target.slow(.01,120);if(this.spec==="rewind"&&Math.random()<.1)target.rewind()}
+   if(this.type==="tesla"){let jumps=this.spec==="storm"?8:4,cur=target,seen=[];for(let i=0;i<jumps;i++){if(!cur||cur.dead||cur.reached)break;cur.damage(this.damage);seen.push(cur);cur=enemies.filter(e=>!e.dead&&!e.reached&&!seen.includes(e)&&dist(cur,e)<=95).sort((a,b)=>dist(cur,a)-dist(cur,b))[0]}}
+   if(this.type==="titan"){let dmg=Math.min(target.maxHp*.02,7000);if(this.spec==="breaker"){dmg*=target.type==="boss"?1.5:1.15;target.damage(dmg,true)}else target.damage(dmg);if(this.spec==="execute"&&target.hp<=target.maxHp*.1){target.hp=0;target.dead=true}}
+  }
+  this.cd=this.cool;
+ }
+ draw(sel){circle(this.x,this.y,20,this.color,C.black,2);if(this.spec)circle(this.x,this.y,25,null,C.yellow,3);if(sel){circle(this.x,this.y,this.range,null,C.white,1);circle(this.x,this.y,24,null,C.yellow,3)}if(this.type==="cannon")circle(this.x,this.y,8,C.black);if(this.type==="time")text("⏳",this.x,this.y+2,18,C.white,"center");if(this.type==="tesla")text("⚡",this.x,this.y+2,18,C.white,"center");if(this.type==="titan")text("T",this.x,this.y+2,18,C.white,"center")}
+}
+
+class Game{
+ constructor(){this.state="menu";this.mode="normal";this.selectedBuild="archer";this.selectedTower=null;this.previewPad=null;this.placingPad=false;this.pendingPad=null;this.metaGold=0;this.bonusLife=0;this.bonusGold=0;this.bonusDamage=0;this.level=0;this.cycle=0;this.stage=0;this.inEndless=false;this.score=0;this.timer=0;this.spawnT=0;this.effects=[];this.scoreSubmitted=false;this.reset(true)}
+ reset(full=false){if(full){this.level=0;this.inEndless=false;this.cycle=0;this.stage=0}this.data=LEVELS[this.level];this.path=this.data.path;this.pads=this.data.pads.map(p=>({...p}));this.waves=this.data.waves;if(this.mode==="endless_plus"){this.life=30;this.gold=200;this.inEndless=true}else{this.life=20+this.bonusLife;this.gold=120+this.bonusGold;if(this.mode==="hard"){this.life=Math.max(8,this.life-4);this.gold=Math.max(70,this.gold-20)}}this.wave=0;this.towers=[];this.enemies=[];this.projectiles=[];this.queue=[];this.waveActive=false;this.between=true;this.previewPad=null;this.selectedTower=null;this.placingPad=false;this.pendingPad=null}
+ start(mode){this.mode=mode;this.metaGold=0;this.bonusLife=0;this.bonusGold=0;this.bonusDamage=0;this.score=0;this.timer=0;this.spawnT=0;this.scoreSubmitted=false;this.level=0;this.inEndless=false;this.cycle=0;this.stage=0;this.reset(true);this.state="playing"}
+ effect(x,y,msg,c=C.yellow){this.effects.push({x,y,msg,c,t:35})}
+ updateEffects(){for(let e of this.effects){e.y-=1;e.t--}this.effects=this.effects.filter(e=>e.t>0)}
+ drawEffects(){for(let e of this.effects)text(e.msg,e.x,e.y,20,e.c,"center")}
+ validPadPosition(p){if(p.y<TOP+30||p.y>H-BOTTOM-30||p.x<35||p.x>W-35)return false;if(nearPath(p,this.path,60))return false;for(let pad of this.pads)if(dist(p,pad)<80)return false;return true}
+ occupied(p){return this.towers.some(t=>t.x===p.x&&t.y===p.y)}
+ towerAt(p){return [...this.towers].reverse().find(t=>dist(t,p)<=24)||null}
+ padAt(p){return this.pads.find(pad=>dist(pad,p)<=26)||null}
+ previewRange(){let r=TOWERS[this.selectedBuild].range;if(this.selectedBuild==="cannon"&&this.mode==="hard")r*=.96;return r}
+ displayLevel(){if(this.mode==="endless_plus")return"Infini+";return this.inEndless?`${this.cycle}.${this.stage}`:String(this.level+1)}
+ towerPenalty(){if(this.mode==="hard")return .78;if(!this.inEndless||this.mode==="endless_plus")return 1;return Math.max(.45,1-this.cycle*.04-(this.stage-1)*.015)}
+ enemyMul(){if(!this.inEndless||this.mode==="endless_plus")return 1;return 1+this.cycle*.22+(this.stage-1)*.08}
+ buildTower(p){let cost=TOWERS[this.selectedBuild].cost;if(this.gold<cost){this.effect(p.x,p.y,"Pas assez",C.red);return}this.gold-=cost;this.towers.push(new Tower(p.x,p.y,this.selectedBuild,(1+this.bonusDamage)*this.towerPenalty(),this.mode==="hard"));this.effect(p.x,p.y,"OK",C.green)}
+ sellTower(){if(!this.selectedTower)return;let v=this.selectedTower.sellValue();this.gold+=v;this.effect(this.selectedTower.x,this.selectedTower.y,"+"+v,C.yellow);this.towers=this.towers.filter(t=>t!==this.selectedTower);this.selectedTower=null}
+ startWave(){if(this.mode==="endless_plus")return;let max=this.inEndless?3:this.waves.length;if(this.wave>=max)return;this.queue=[];let data=this.inEndless?this.endlessWave(this.wave):this.waves[this.wave];for(let [type,n] of data)for(let i=0;i<n;i++)this.queue.push(type);this.queue.sort(()=>Math.random()-.5);this.waveActive=true;this.between=false;this.spawnT=0;this.selectedTower=null;this.previewPad=null}
+ endlessWave(w){let s=this.cycle+this.stage;if(w===0)return[["grunt",10+s*2],["fast",6+s]];if(w===1)return[["tank",5+Math.floor(s/2)],["flying",8+s],["shield",5+Math.floor(s/2)]];return[["runner",10+s],["healer",4+Math.floor(s/2)],["boss",1+Math.floor(this.cycle/3)]]}
+ spawn(type){let hp=this.enemyMul(),sp=1;if(this.mode==="hard"){hp*=1.1;sp*=1.04}this.enemies.push(new Enemy(type,this.path,hp,sp))}
+ updateEndless(){this.timer++;let sec=this.timer/FPS,dif=1+sec/90;this.spawnT--;let delay=Math.max(12,Math.floor(70/dif));if(this.spawnT<=0){this.spawnT=delay;let pool=["grunt"];if(sec>30)pool.push("fast");if(sec>60)pool.push("tank");if(sec>90)pool.push("flying");if(sec>130)pool.push("shield");if(sec>170)pool.push("runner");if(sec>220)pool.push("healer");if(sec>300)pool.push("boss");let type=pool[Math.floor(Math.random()*pool.length)];this.enemies.push(new Enemy(type,this.path,dif,1+Math.min(.65,sec/900)))}}
+ update(){this.updateEffects();if(this.state!=="playing")return;if(this.mode==="endless_plus")this.updateEndless();if(this.mode!=="endless_plus"&&this.waveActive){this.spawnT--;if(this.queue.length&&this.spawnT<=0){this.spawn(this.queue.shift());this.spawnT=18+Math.floor(Math.random()*17)}}for(let e of this.enemies)e.update(this.enemies);let leaked=0;for(let e of this.enemies)if(e.reached&&!e.dead){leaked+=e.type==="boss"?2:1;e.dead=true}this.life-=leaked;for(let t of this.towers)t.update(this.enemies,this.projectiles);for(let p of this.projectiles)p.update(this.enemies);for(let e of this.enemies)if(e.dead&&e.hp<=0){let r=e.reward;if(this.mode==="hard")r=Math.max(1,Math.floor(r*.9));if(this.inEndless&&this.mode!=="endless_plus")r=Math.max(1,Math.floor(r*.85));this.gold+=r;this.metaGold+=r;if(this.mode==="endless_plus")this.score+=r*10;e.hp=999999}this.enemies=this.enemies.filter(e=>!(e.dead&&e.hp>100000)&&!(e.dead&&e.reached));this.projectiles=this.projectiles.filter(p=>!p.dead);if(this.life<=0){this.state="game_over";return}if(this.mode==="endless_plus")return;let active=this.enemies.some(e=>!e.dead&&!e.reached);if(this.waveActive&&!this.queue.length&&!active){this.waveActive=false;this.between=true;this.wave++;let b=this.mode==="hard"?20:35;this.gold+=b;this.metaGold+=b}let max=this.inEndless?3:this.waves.length;if(this.wave>=max&&this.between&&!this.waveActive)this.state="level_complete"}
+ nextLevel(){let r=this.mode==="hard"?35:65;if(this.inEndless)r=Math.floor(r*.75);this.metaGold+=r;if(!this.inEndless){this.level++;if(this.level>=LEVELS.length){this.inEndless=true;this.cycle=1;this.stage=1;this.level=0}}else{this.stage++;this.level++;if(this.level>=LEVELS.length){this.level=0;this.cycle++;this.stage=1}}this.reset(false);this.state="playing"}
+ async addScore(){if(this.scoreSubmitted)return alert("Score déjà ajouté");let pseudo=prompt("Pseudo :","Paul");if(!pseudo)return;let pass=prompt("Mot de passe :");if(!pass)return;let res=await submitScore(pseudo,pass,this.score);if(!res.ok)return alert("Erreur : "+res.msg);this.scoreSubmitted=true;alert(res.msg)}
+ click(p){if(this.state==="menu"){if(inside(p,this.btnInfini))this.start("endless_plus");else if(inside(p,this.btnNormal))this.start("normal");else if(inside(p,this.btnHard))this.start("hard");else if(inside(p,this.btnRefresh))refreshLeaderboard();return}
+  if(this.state==="game_over"){if(inside(p,this.btnRestart))this.state="menu";if(this.mode==="endless_plus"&&inside(p,this.btnAddScore))this.addScore();if(inside(p,this.btnRefresh))refreshLeaderboard();return}
+  if(this.state==="level_complete"){for(let item of this.metaRects)if(inside(p,item.r)){this.buyMeta(item.b);return}if(inside(p,this.btnNext))this.nextLevel();return}
+  if(this.state!=="playing")return;
+  if(this.placingPad){if(inside(p,this.btnCancelPad)){this.placingPad=false;this.pendingPad=null;return}if(inside(p,this.btnConfirmPad)){if(!this.pendingPad){this.effect(W/2,H-90,"Choisis un endroit",C.red);return}if(!this.validPadPosition(this.pendingPad)){this.effect(this.pendingPad.x,this.pendingPad.y,"Impossible",C.red);return}if(this.gold<NEW_PAD_COST){this.effect(W/2,H-90,"Pas assez d'or",C.red);return}this.gold-=NEW_PAD_COST;this.pads.push({x:this.pendingPad.x,y:this.pendingPad.y});this.effect(this.pendingPad.x,this.pendingPad.y,"Socle ajouté !",C.green);this.placingPad=false;this.pendingPad=null;return}if(p.y>TOP&&p.y<H-BOTTOM)this.pendingPad={x:p.x,y:p.y};return}
+  if(inside(p,this.btnArcher)){this.selectedBuild="archer";this.selectedTower=null;return}if(inside(p,this.btnCannon)){this.selectedBuild="cannon";this.selectedTower=null;return}if(inside(p,this.btnTime)){this.selectedBuild="time";this.selectedTower=null;return}if(inside(p,this.btnTesla)){this.selectedBuild="tesla";this.selectedTower=null;return}if(inside(p,this.btnTitan)){this.selectedBuild="titan";this.selectedTower=null;return}
+  if(inside(p,this.btnNewPad)){if(this.gold<NEW_PAD_COST){this.effect(W/2,H-90,"Pas assez d'or",C.red);return}this.placingPad=true;this.pendingPad=null;this.selectedTower=null;this.previewPad=null;return}
+  if(inside(p,this.btnWave)&&this.between&&this.mode!=="endless_plus"){this.startWave();return}
+  if(inside(p,this.btnUpgrade)&&this.selectedTower){let c=this.selectedTower.upgradeCost();if(c!==null&&this.gold>=c){this.gold-=c;this.selectedTower.upgrade();this.effect(this.selectedTower.x,this.selectedTower.y,"UP!",C.green)}return}
+  if(inside(p,this.btnSell)&&this.selectedTower){this.sellTower();return}if(inside(p,this.btnSpec1)&&this.selectedTower){if(this.gold>=this.selectedTower.specCost()){this.gold-=this.selectedTower.specCost();this.selectedTower.specialize(1)}}if(inside(p,this.btnSpec2)&&this.selectedTower){if(this.gold>=this.selectedTower.specCost()){this.gold-=this.selectedTower.specCost();this.selectedTower.specialize(2)}}
+  let t=this.towerAt(p);if(t){this.selectedTower=t;this.previewPad=null;return}let pad=this.padAt(p);if(pad&&!this.occupied(pad)){this.selectedTower=null;if(this.previewPad!==pad){this.previewPad=pad;return}this.buildTower(pad);this.previewPad=null;return}this.selectedTower=null;this.previewPad=null}
+ buyMeta(b){if(this.metaGold<b.cost){this.effect(W/2,130,"Pas assez",C.red);return}this.metaGold-=b.cost;if(b.key==="life")this.bonusLife+=b.value;if(b.key==="gold")this.bonusGold+=b.value;if(b.key==="damage")this.bonusDamage+=b.value;this.effect(W/2,130,"Acheté",C.green)}
+ drawBackground(){ctx.fillStyle=C.bg;ctx.fillRect(0,0,W,H);ctx.fillStyle=C.panel;ctx.fillRect(0,0,W,TOP);ctx.fillRect(0,H-BOTTOM,W,BOTTOM);ctx.strokeStyle=C.path;ctx.lineWidth=42;ctx.lineCap="round";ctx.lineJoin="round";ctx.beginPath();ctx.moveTo(this.path[0].x,this.path[0].y);for(let p of this.path.slice(1))ctx.lineTo(p.x,p.y);ctx.stroke();ctx.strokeStyle="#785a3c";ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(this.path[0].x,this.path[0].y);for(let p of this.path.slice(1))ctx.lineTo(p.x,p.y);ctx.stroke();for(let p of this.pads)circle(p.x,p.y,26,this.occupied(p)?C.dark:C.light,C.white,2);if(this.placingPad){ctx.save();ctx.globalAlpha=.18;ctx.fillStyle="red";ctx.fillRect(0,TOP,W,H-TOP-BOTTOM);ctx.fillStyle="lime";for(let x=40;x<W-40;x+=40)for(let y=TOP+40;y<H-BOTTOM-40;y+=40)if(this.validPadPosition({x,y}))ctx.fillRect(x-10,y-10,20,20);ctx.restore();if(this.pendingPad){let ok=this.validPadPosition(this.pendingPad);circle(this.pendingPad.x,this.pendingPad.y,28,ok?"rgba(0,255,0,.55)":"rgba(255,0,0,.55)",ok?C.green:C.red,3);text(ok?"OK":"NON",this.pendingPad.x,this.pendingPad.y+2,18,C.white,"center")}}if(this.previewPad){ctx.save();ctx.globalAlpha=.25;circle(this.previewPad.x,this.previewPad.y,this.previewRange(),C.white);ctx.restore();circle(this.previewPad.x,this.previewPad.y,this.previewRange(),null,C.white,2);circle(this.previewPad.x,this.previewPad.y,28,null,C.yellow,3)}}
+ drawHud(){text(`Mode : ${this.mode.toUpperCase()}`,20,35,21);text(`Niveau : ${this.displayLevel()} - ${this.data.name}`,210,35,21);text(`Vie : ${this.life}`,560,35,21);text(`Or : ${this.gold}`,680,35,21,C.yellow);if(this.mode==="endless_plus"){text(`Score : ${this.score}`,810,35,21,C.cyan);text(`Temps : ${Math.floor(this.timer/FPS)}s`,970,35,21)}else{text(`Vague : ${this.wave}/${this.inEndless?3:this.waves.length}`,830,35,21)}this.btnWave=button(1040,15,145,40,this.mode==="endless_plus"?"Infini":(this.between?"Lancer":"En cours"),this.between?C.green:C.gray)}
+ drawEntities(){for(let t of this.towers)t.draw(t===this.selectedTower);for(let p of this.projectiles)p.draw();for(let e of this.enemies)e.draw()}
+ drawBottom(){let y=H-BOTTOM+12;if(this.placingPad){this.btnCancelPad=button(35,y+35,210,55,"Annuler",C.red);this.btnConfirmPad=button(275,y+35,210,55,"Valider",C.green);let msg=this.pendingPad?(this.validPadPosition(this.pendingPad)?"Emplacement valide : clique Valider":"Emplacement impossible"):"Clique sur la carte pour choisir";text(msg,530,y+62,22,this.pendingPad&&!this.validPadPosition(this.pendingPad)?C.red:C.white);rect(930,y+20,230,85,C.dark,C.white,14);text(`Prix : ${NEW_PAD_COST}`,945,y+45,18,C.yellow);text(`Gold : ${this.gold}`,945,y+74,18,C.white);return}
+  this.btnArcher=button(20,y,145,40,"Archer",this.selectedBuild==="archer"?C.green:C.dark);this.btnCannon=button(175,y,145,40,"Canon",this.selectedBuild==="cannon"?C.orange:C.dark);this.btnTime=button(330,y,145,40,"Temps",this.selectedBuild==="time"?C.purple:C.dark);this.btnTesla=button(20,y+50,145,40,"Tesla",this.selectedBuild==="tesla"?C.cyan:C.dark);this.btnTitan=button(175,y+50,145,40,"Titan",this.selectedBuild==="titan"?C.red:C.dark);this.btnNewPad=button(330,y+50,145,40,"+ Socle",C.yellow);this.btnUpgrade=button(495,y,155,40,"Améliorer",this.selectedTower?C.purple:C.dark);this.btnSell=button(495,y+50,155,40,"Vendre",this.selectedTower?C.red:C.dark);let ok=this.selectedTower&&this.selectedTower.level>=4&&!this.selectedTower.spec;this.btnSpec1=button(665,y,145,40,"Spé 1",ok?C.cyan:C.dark);this.btnSpec2=button(665,y+50,145,40,"Spé 2",ok?C.cyan:C.dark);rect(830,y,350,115,C.dark,C.white,14);if(this.selectedTower){let t=this.selectedTower,up=t.upgradeCost(),sp=SPEC[t.type];text(`${t.label} niv ${t.level}/4`,845,y+16,18);text(`Dégâts ${Math.floor(t.damage)} | Portée ${Math.floor(t.range)}`,845,y+39,15);text(`Vente : ${t.sellValue()}`,845,y+60,15,C.yellow);text(up===null?`Spé : ${t.specCost()}`:`Upgrade : ${up}`,965,y+60,15,C.cyan);if(up===null&&!t.spec){text(`1 ${sp[0][0]}: ${sp[0][1]}`,845,y+82,12);text(`2 ${sp[1][0]}: ${sp[1][1]}`,845,y+100,12)}}else if(this.previewPad){let tw=TOWERS[this.selectedBuild],sp=SPEC[this.selectedBuild];text(`Preview : ${tw.label} (${tw.cost})`,845,y+17,18);text(`Portée : ${Math.floor(this.previewRange())}`,845,y+39,15,C.cyan);text(`Spé 1 ${sp[0][0]}: ${sp[0][1]}`,845,y+68,12);text(`Spé 2 ${sp[1][0]}: ${sp[1][1]}`,845,y+90,12)}else{text("1 clic socle = portée",845,y+25,18);text("2e clic = construire",845,y+50,15,C.cyan);text(`+ Socle : ${NEW_PAD_COST} gold`,845,y+76,14,C.yellow)}}
+ drawLeaderboard(x,y,compact=false){text("Leaderboard Infini+",x,y,compact?18:22,C.yellow,"center");if(!leaderboardReady){text("Chargement...",x,y+30,16,C.light,"center");return}if(!leaderboard.length){text("Aucun score pour l'instant",x,y+30,16,C.light,"center");return}for(let i=0;i<Math.min(leaderboard.length,compact?5:10);i++){let e=leaderboard[i];text(`${i+1}. ${e.pseudo} - ${e.score}`,x,y+30+i*23,compact?15:17,C.white,"center")}}
+ drawMenu(){ctx.fillStyle="#285078";ctx.fillRect(0,0,W,H);text("Tower Defense",W/2,85,44,C.white,"center");this.btnInfini=button(W/2-220,175,440,85,"INFINI +",C.purple,28);this.btnNormal=button(W/2-220,285,205,58,"NORMAL",C.green);this.btnHard=button(W/2+15,285,205,58,"HARD",C.red);this.btnRefresh=button(W/2-145,385,290,45,"Rafraîchir leaderboard",C.dark);this.drawLeaderboard(W/2,465,true)}
+ drawLevelComplete(){ctx.fillStyle="#1e3250";ctx.fillRect(0,0,W,H);text("Niveau terminé !",W/2,80,46,C.white,"center");text(`Or campagne : ${this.metaGold}`,W/2,140,24,C.yellow,"center");this.metaRects=[];let y=210;for(let b of META){let r={x:180,y,w:840,h:75};rect(r.x,r.y,r.w,r.h,C.panel,C.white,14);text(b.name,r.x+20,r.y+22,22);text(b.desc,r.x+20,r.y+52,17,C.light);text(`Coût : ${b.cost}`,r.x+r.w-150,r.y+38,22,C.yellow);this.metaRects.push({r,b});y+=95}this.btnNext=button(W/2-160,590,320,65,"Continuer",C.green);this.drawEffects()}
+ drawGameOver(){this.drawBackground();this.drawEntities();this.drawHud();this.drawBottom();ctx.fillStyle="rgba(0,0,0,.65)";ctx.fillRect(0,0,W,H);text("Défaite",W/2,155,50,C.red,"center");if(this.mode==="endless_plus"){text(`Score final : ${this.score}`,W/2,220,32,C.yellow,"center");this.btnRefresh=button(W/2-145,535,290,45,"Rafraîchir leaderboard",C.dark);this.drawLeaderboard(W/2,275,false);this.btnRestart=button(W/2-315,610,280,60,"Retour menu",C.green);this.btnAddScore=button(W/2+35,610,280,60,this.scoreSubmitted?"Score ajouté":"Ajouter score",this.scoreSubmitted?C.gray:C.purple)}else{text(`Tu es arrivé au niveau : ${this.displayLevel()}`,W/2,260,32,C.white,"center");this.btnRestart=button(W/2-150,360,300,65,"Retour menu",C.green)}}
+ drawPlaying(){this.drawBackground();this.drawEntities();this.drawHud();this.drawBottom();this.drawEffects()}
+ draw(){if(this.state==="menu")this.drawMenu();else if(this.state==="playing")this.drawPlaying();else if(this.state==="level_complete")this.drawLevelComplete();else if(this.state==="game_over")this.drawGameOver()}
+}
+
+const game=new Game();refreshLeaderboard();
+canvas.addEventListener("click",e=>{let b=canvas.getBoundingClientRect();game.click({x:(e.clientX-b.left)*(canvas.width/b.width),y:(e.clientY-b.top)*(canvas.height/b.height)})});
+function loop(){game.update();game.draw();requestAnimationFrame(loop)}
+loop();
+</script>
 </body>
 </html>
